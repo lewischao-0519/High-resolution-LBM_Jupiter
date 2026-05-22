@@ -1,0 +1,36 @@
+# core/lattice.py  ── D2Q9 晶格常數與平衡分佈計算
+# 對應 PDF §4 數值方法（Eq.3）
+#
+import taichi as ti
+import numpy as np
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+import config as cfg
+
+@ti.func
+def feq_single(i: int, rho: float, ux: float, uy: float) -> float:
+    """
+    計算單一方向 i 的平衡分佈 f^eq_i
+    f^eq = ρ * w_i * [1 + 3(c_i·u) + 4.5(c_i·u)^2 - 1.5|u|^2]
+    注意：係數 3, 4.5, 1.5 對應 cs^2=1/3 的 D2Q9 格子
+    """
+    cu  = float(cfg.CX[i]) * ux + float(cfg.CY[i]) * uy
+    u2  = ux * ux + uy * uy
+    return rho * cfg.W[i] * (1.0 + 3.0*cu + 4.5*cu*cu - 1.5*u2)
+
+
+@ti.func
+def compute_macro(f_local: ti.template()) -> ti.Vector:
+    """
+    從局部分佈函數向量計算宏觀量 [rho, ux, uy]
+    回傳 ti.Vector([rho, ux, uy])
+    """
+    rho = 0.0
+    mx  = 0.0
+    my  = 0.0
+    for i in ti.static(range(9)):
+        rho += f_local[i]
+        mx  += f_local[i] * float(cfg.CX[i])
+        my  += f_local[i] * float(cfg.CY[i])
+    rho = ti.max(rho, 1e-6)
+    return ti.Vector([rho, mx / rho, my / rho])

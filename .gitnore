@@ -1,0 +1,43 @@
+# === Python 系統與暫存檔 ===
+__pycache__/
+*.py[cod]
+*$py.class
+
+# === C 擴充功能與套件打包 ===
+*.so
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# === 虛擬環境 (最重要，一定要忽略) ===
+.venv/
+venv/
+ENV/
+env/
+
+# === 個人開發工具設定 (IDE) ===
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# === 敏感資料、環境變數與日誌 ===
+.env
+*.log
