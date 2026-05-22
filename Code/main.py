@@ -1,0 +1,229 @@
+# main.py  ── Jupiter LBM 主程式
+# 對應 PDF §8 研究時程與 §11 程式架構
+#
+# 資料流：
+#   config.py
+#     └─ core/collision.py  (f, rho, ux, uy fields)
+#          ├─ core/forcing.py  → Fx, Fy fields
+#          │    ├─ physics/coriolis.py
+#          │    └─ physics/thermal.py  (T_field)
+#          └─ bgk_collision_kernel(omega)
+#     └─ analysis/ (vorticity, spectrum, zonal_mean)
+#     └─ utils/   (plotting)
+#
+import os, sys
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+
+# ── 設定 Python path ──
+ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, ROOT)
+
+import config as cfg
+from config import init_constants
+
+# ── 核心模組 ──
+from core.collision import (
+    f, f_new,
+    rho_field, ux_field, uy_field,
+    Fx_field, Fy_field,
+    init_fields, bgk_collision_kernel, swap_fields,
+    apply_periodic_bc_y
+)
+from core.forcing import update_forcing_kernel, apply_noise_perturbation
+
+# ── 物理模組 ──
+from physics.thermal import (
+    T_field,
+    init_temperature,
+    advect_temperature_kernel,
+    relax_temperature_kernel
+)
+from physics.nondimensional import print_dimensionless_summary
+
+# ── 分析模組 ──
+from analysis.vorticity  import get_vorticity_numpy
+from analysis.spectrum   import compute_energy_spectrum, kolmogorov_slope
+from analysis.zonal_mean import compute_zonal_mean, count_jet_streams
+
+# ── 視覺化工具 ──
+from utils.plotting import (
+    plot_velocity_magnitude,
+    plot_vorticity,
+    plot_zonal_profile,
+    plot_energy_spectrum
+)
+
+
+def setup_output_dirs():
+    """建立輸出資料夾"""
+    for d in [cfg.OUTPUT_DIR, cfg.DATA_DIR, "output/frames"]:
+        os.makedirs(d, exist_ok=True)
+
+
+def run_simulation():
+    # ── 1. 初始化 ──
+    print("🪐 Jupiter LBM Simulation — initializing...")
+    init_constants()
+    init_fields()
+    init_temperature()
+    setup_output_dirs()
+
+    print_dimensionless_summary()
+
+    # ── 2. 資料記錄器 ──
+    log = {
+        'step'        : [],
+        'u_rms'       : [],
+        'jet_count'   : [],
+        'E_slope'     : [],
+        'T_std'       : [],
+    }
+    # 用於計算渦流通量的歷史資料（保留最近 10 幀）
+    velocity_history = []
+
+    # ── 3. 影片設定 ──
+    fig_movie, axes = plt.subplots(1, 2, figsize=(14, 4))
+    ax_vel, ax_vort = axes
+
+    # 初始幀
+    dummy = np.zeros((cfg.NY, cfg.NX), dtype=np.float32)
+    im_vel  = ax_vel.imshow(dummy,  cmap='inferno', vmin=0,    vmax=cfg.U_MAX,
+                             origin='lower', aspect='auto')
+    im_vort = ax_vort.imshow(dummy, cmap='RdBu_r',  vmin=-0.01, vmax=0.01,
+                              origin='lower', aspect='auto')
+    plt.colorbar(im_vel,  ax=ax_vel,  label='|u|')
+    plt.colorbar(im_vort, ax=ax_vort, label='ω_z')
+    ax_vel.set_title("Velocity Magnitude")
+    ax_vort.set_title("Vorticity")
+
+    writer = animation.FFMpegWriter(fps=20, bitrate=2000)
+    movie_path = os.path.join(cfg.OUTPUT_DIR, "jupiter_lbm.mp4")
+
+    print(f"🚀 Starting main loop  (MAX_STEPS={cfg.MAX_STEPS}) ...")
+
+    with writer.saving(fig_movie, movie_path, dpi=120):
+        for step in range(cfg.MAX_STEPS):
+
+            # ── A. 更新外力場（Coriolis + 熱力）──
+            update_forcing_kernel(cfg.F0, cfg.BETA, cfg.ALPHA_T)
+
+            # ── B. 早期噪音擾動（觸發不穩定性）──
+            apply_noise_perturbation(step)
+
+            # ── C. BGK 碰撞 + 串流（Loop Fusion）──
+            bgk_collision_kernel(cfg.OMEGA)
+            swap_fields()
+
+            # ── D. 週期邊界（y 方向顯式修正）──
+            #apply_periodic_bc_y()
+ 
+            # ── E. 溫度場演化（每步）──
+            advect_temperature_kernel(1.0)
+            relax_temperature_kernel(cfg.T0, cfg.DELTA_T, 5e-5)
+
+            # ── F. 每 SAVE_EVERY 步做記錄與視覺化 ──
+            if step % cfg.SAVE_EVERY == 0:
+                ux_np = ux_field.to_numpy()
+                uy_np = uy_field.to_numpy()
+
+                # 基本統計
+                u_rms  = float(np.sqrt((ux_np**2 + uy_np**2).mean()))
+                zm     = compute_zonal_mean()
+                jets   = count_jet_streams(zm['u_bar'])
+
+                # 能量譜
+                k_arr, E_arr = compute_energy_spectrum(ux_np, uy_np)
+                slope        = kolmogorov_slope(k_arr, E_arr)
+
+                # 溫度統計
+                T_std = float(T_field.to_numpy().std())
+
+                # 記錄
+                log['step'].append(step)
+                log['u_rms'].append(u_rms)
+                log['jet_count'].append(jets)
+                log['E_slope'].append(slope if not np.isnan(slope) else 0.0)
+                log['T_std'].append(T_std)
+
+                # 渦度
+                omega_np = get_vorticity_numpy()
+
+                # 更新影片幀
+                u_mag = np.sqrt(ux_np**2 + uy_np**2)
+                vmax_vort = max(float(np.abs(omega_np).max()), 1e-6)
+                im_vel.set_array(u_mag)
+                im_vel.set_clim(0, max(u_rms * 2, cfg.U_MAX))
+                im_vort.set_array(omega_np)
+                im_vort.set_clim(-vmax_vort, vmax_vort)
+                fig_movie.suptitle(f"Step {step}  |  U_rms={u_rms:.4f}  |  Jets={jets}",
+                                   fontsize=11)
+                writer.grab_frame()
+
+                # 儲存靜態圖（每 5000 步）
+                if step % 5000 == 0:
+                    plot_zonal_profile(
+                        zm['y'], zm['u_bar'], step,
+                        save_path=f"output/frames/zonal_{step:06d}.png"
+                    )
+                    plot_energy_spectrum(
+                        k_arr, E_arr, step, slope=slope,
+                        save_path=f"output/frames/spectrum_{step:06d}.png"
+                    )
+                    print(f"  Step {step:6d} | U_rms={u_rms:.5f} | "
+                          f"Jets={jets} | E_slope={slope:.2f} | T_std={T_std:.4f}")
+
+    print("✅ Simulation done! Generating summary plots...")
+    _save_summary(log)
+    print(f"📁 All outputs saved to '{cfg.OUTPUT_DIR}/'")
+
+
+def _save_summary(log: dict):
+    """儲存最終時間序列摘要圖"""
+    steps = log['step']
+    if len(steps) == 0:
+        return
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    fig.suptitle("Jupiter LBM — Simulation Summary", fontsize=13)
+
+    axes[0, 0].plot(steps, log['u_rms'], color='steelblue')
+    axes[0, 0].set_title("RMS Velocity")
+    axes[0, 0].set_ylabel("|u|_rms")
+    axes[0, 0].grid(True, linestyle='--', alpha=0.5)
+
+    axes[0, 1].plot(steps, log['jet_count'], color='darkorange', drawstyle='steps-mid')
+    axes[0, 1].set_title("Jet Stream Count")
+    axes[0, 1].set_ylabel("# of jets")
+    axes[0, 1].grid(True, linestyle='--', alpha=0.5)
+
+    axes[1, 0].plot(steps, log['E_slope'], color='firebrick')
+    axes[1, 0].axhline(-5/3, color='k', linestyle='--', linewidth=0.8, label='-5/3')
+    axes[1, 0].axhline(-3,   color='b', linestyle='--', linewidth=0.8, label='-3')
+    axes[1, 0].set_title("Energy Spectrum Slope")
+    axes[1, 0].set_ylabel("α  (E~k^α)")
+    axes[1, 0].legend(fontsize=8)
+    axes[1, 0].grid(True, linestyle='--', alpha=0.5)
+
+    axes[1, 1].plot(steps, log['T_std'], color='purple')
+    axes[1, 1].set_title("Temperature Std Dev")
+    axes[1, 1].set_ylabel("std(T)")
+    axes[1, 1].grid(True, linestyle='--', alpha=0.5)
+
+    for ax in axes.flat:
+        ax.set_xlabel("Step")
+
+    plt.tight_layout()
+    fig.savefig(os.path.join(cfg.OUTPUT_DIR, "summary.png"), dpi=200)
+    plt.close(fig)
+
+    # 儲存數值資料
+    np.save(os.path.join(cfg.DATA_DIR, "log.npy"), log)
+    print(f"  → summary.png and log.npy saved.")
+
+
+if __name__ == "__main__":
+    run_simulation()
