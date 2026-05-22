@@ -6,7 +6,7 @@ import numpy as np
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import config as cfg
-
+from core.collision import ux_field, uy_field
 
 # ── 溫度場（GPU 常駐，由 forcing.py 讀取）──
 T_field = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
@@ -32,28 +32,29 @@ def init_temperature_kernel(T0: float, delta_T: float):
 def advect_temperature_kernel(dt: float):
     """
     溫度平流（簡化版：用宏觀速度場平流，一階 upwind）。
-    需要 ux_field / uy_field 已更新（從 collision.py 匯入）。
-    
-    ∂T/∂t + u·∇T = κ∇²T  （此處略去擴散項，由黏滯隱式耗散代替）
+    需要 ux_field / uy_field 已更新。
     """
-    from core.collision import ux_field, uy_field
     for y, x in T_field:
         ux = ux_field[y, x]
         uy = uy_field[y, x]
 
-        # Upwind 差分（一階精度，穩定但有數值耗散）
+        # 提前声明变量
+        dTdx = 0.0
+        dTdy = 0.0
+        
+        # Upwind 差分（x 方向）
         if ux > 0.0:
             dTdx = T_field[y, x] - T_field[y, (x-1+cfg.NX) % cfg.NX]
         else:
             dTdx = T_field[y, (x+1) % cfg.NX] - T_field[y, x]
 
+        # Upwind 差分（y 方向）
         if uy > 0.0:
             dTdy = T_field[y, x] - T_field[(y-1+cfg.NY) % cfg.NY, x]
         else:
             dTdy = T_field[(y+1) % cfg.NY, x] - T_field[y, x]
 
         T_field[y, x] -= dt * (ux * dTdx + uy * dTdy)
-
 
 @ti.kernel
 def relax_temperature_kernel(T0: float, delta_T: float, relax_rate: float):

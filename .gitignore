@@ -40,3 +40,5 @@ env/
 =======
 *.log.DS_Store
 >>>>>>> 002d11c (feat : retrack)
+*.png
+*.npy

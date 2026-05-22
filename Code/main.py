@@ -85,96 +85,63 @@ def run_simulation():
     # 用於計算渦流通量的歷史資料（保留最近 10 幀）
     velocity_history = []
 
-    # ── 3. 影片設定 ──
-    fig_movie, axes = plt.subplots(1, 2, figsize=(14, 4))
-    ax_vel, ax_vort = axes
+    # ── 影片設定（已禁用，仅保存静态图）──
+    print(f"🚀 Starting main loop  (MAX_STEPS={cfg.MAX_STEPS}) ... (video disabled)")
+    
+    for step in range(cfg.MAX_STEPS):
+        # ── A. 更新外力場（Coriolis + 熱力）──
+        update_forcing_kernel(cfg.F0, cfg.BETA, cfg.ALPHA_T)
 
-    # 初始幀
-    dummy = np.zeros((cfg.NY, cfg.NX), dtype=np.float32)
-    im_vel  = ax_vel.imshow(dummy,  cmap='inferno', vmin=0,    vmax=cfg.U_MAX,
-                             origin='lower', aspect='auto')
-    im_vort = ax_vort.imshow(dummy, cmap='RdBu_r',  vmin=-0.01, vmax=0.01,
-                              origin='lower', aspect='auto')
-    plt.colorbar(im_vel,  ax=ax_vel,  label='|u|')
-    plt.colorbar(im_vort, ax=ax_vort, label='ω_z')
-    ax_vel.set_title("Velocity Magnitude")
-    ax_vort.set_title("Vorticity")
+        # ── B. 早期噪音擾動（觸發不穩定性）──
+        apply_noise_perturbation(step)
 
-    writer = animation.FFMpegWriter(fps=20, bitrate=2000)
-    movie_path = os.path.join(cfg.OUTPUT_DIR, "jupiter_lbm.mp4")
+        # ── C. BGK 碰撞 + 串流（Loop Fusion）──
+        bgk_collision_kernel(cfg.OMEGA)
+        swap_fields()
 
-    print(f"🚀 Starting main loop  (MAX_STEPS={cfg.MAX_STEPS}) ...")
+        # 注意：已删除 apply_periodic_bc_y()（多余的）
 
-    with writer.saving(fig_movie, movie_path, dpi=120):
-        for step in range(cfg.MAX_STEPS):
+        # ── D. 溫度場演化（每步）──
+        advect_temperature_kernel(1.0)
+        relax_temperature_kernel(cfg.T0, cfg.DELTA_T, 5e-5)
 
-            # ── A. 更新外力場（Coriolis + 熱力）──
-            update_forcing_kernel(cfg.F0, cfg.BETA, cfg.ALPHA_T)
+        # ── E. 每 SAVE_EVERY 步做記錄與保存靜態圖 ──
+        if step % cfg.SAVE_EVERY == 0:
+            ux_np = ux_field.to_numpy()
+            uy_np = uy_field.to_numpy()
 
-            # ── B. 早期噪音擾動（觸發不穩定性）──
-            apply_noise_perturbation(step)
+            # 基本統計
+            u_rms  = float(np.sqrt((ux_np**2 + uy_np**2).mean()))
+            zm     = compute_zonal_mean()
+            jets   = count_jet_streams(zm['u_bar'])
 
-            # ── C. BGK 碰撞 + 串流（Loop Fusion）──
-            bgk_collision_kernel(cfg.OMEGA)
-            swap_fields()
+            # 能量譜
+            k_arr, E_arr = compute_energy_spectrum(ux_np, uy_np)
+            slope        = kolmogorov_slope(k_arr, E_arr)
 
-            # ── D. 週期邊界（y 方向顯式修正）──
-            #apply_periodic_bc_y()
- 
-            # ── E. 溫度場演化（每步）──
-            advect_temperature_kernel(1.0)
-            relax_temperature_kernel(cfg.T0, cfg.DELTA_T, 5e-5)
+            # 溫度統計
+            T_std = float(T_field.to_numpy().std())
 
-            # ── F. 每 SAVE_EVERY 步做記錄與視覺化 ──
-            if step % cfg.SAVE_EVERY == 0:
-                ux_np = ux_field.to_numpy()
-                uy_np = uy_field.to_numpy()
+            # 記錄
+            log['step'].append(step)
+            log['u_rms'].append(u_rms)
+            log['jet_count'].append(jets)
+            log['E_slope'].append(slope if not np.isnan(slope) else 0.0)
+            log['T_std'].append(T_std)
 
-                # 基本統計
-                u_rms  = float(np.sqrt((ux_np**2 + uy_np**2).mean()))
-                zm     = compute_zonal_mean()
-                jets   = count_jet_streams(zm['u_bar'])
+            # 渦度
+            omega_np = get_vorticity_numpy()
 
-                # 能量譜
-                k_arr, E_arr = compute_energy_spectrum(ux_np, uy_np)
-                slope        = kolmogorov_slope(k_arr, E_arr)
-
-                # 溫度統計
-                T_std = float(T_field.to_numpy().std())
-
-                # 記錄
-                log['step'].append(step)
-                log['u_rms'].append(u_rms)
-                log['jet_count'].append(jets)
-                log['E_slope'].append(slope if not np.isnan(slope) else 0.0)
-                log['T_std'].append(T_std)
-
-                # 渦度
-                omega_np = get_vorticity_numpy()
-
-                # 更新影片幀
-                u_mag = np.sqrt(ux_np**2 + uy_np**2)
-                vmax_vort = max(float(np.abs(omega_np).max()), 1e-6)
-                im_vel.set_array(u_mag)
-                im_vel.set_clim(0, max(u_rms * 2, cfg.U_MAX))
-                im_vort.set_array(omega_np)
-                im_vort.set_clim(-vmax_vort, vmax_vort)
-                fig_movie.suptitle(f"Step {step}  |  U_rms={u_rms:.4f}  |  Jets={jets}",
-                                   fontsize=11)
-                writer.grab_frame()
-
-                # 儲存靜態圖（每 5000 步）
-                if step % 5000 == 0:
-                    plot_zonal_profile(
-                        zm['y'], zm['u_bar'], step,
-                        save_path=f"output/frames/zonal_{step:06d}.png"
-                    )
-                    plot_energy_spectrum(
-                        k_arr, E_arr, step, slope=slope,
-                        save_path=f"output/frames/spectrum_{step:06d}.png"
-                    )
-                    print(f"  Step {step:6d} | U_rms={u_rms:.5f} | "
-                          f"Jets={jets} | E_slope={slope:.2f} | T_std={T_std:.4f}")
+            # 保存靜態圖
+            u_mag = np.sqrt(ux_np**2 + uy_np**2)
+            plot_velocity_magnitude(ux_np, uy_np, step, save_path=f"output/frames/vel_{step:06d}.png")
+            plot_vorticity(omega_np, step, save_path=f"output/frames/vort_{step:06d}.png")
+            
+            # 每 5000 步保存剖面和能譜圖
+            if step % 5000 == 0:
+                plot_zonal_profile(zm['y'], zm['u_bar'], step, save_path=f"output/frames/zonal_{step:06d}.png")
+                plot_energy_spectrum(k_arr, E_arr, step, slope=slope, save_path=f"output/frames/spectrum_{step:06d}.png")
+                print(f"  Step {step:6d} | U_rms={u_rms:.5f} | Jets={jets} | E_slope={slope:.2f} | T_std={T_std:.4f}")
 
     print("✅ Simulation done! Generating summary plots...")
     _save_summary(log)
