@@ -34,5 +34,9 @@ env/
 
 # === 敏感資料、環境變數與日誌 ===
 .env
+<<<<<<< HEAD
 *.log
 >>>>>>> 7907c3d (feat: rename .gitnore to .gitignore)
+=======
+*.log.DS_Store
+>>>>>>> 002d11c (feat : retrack)
