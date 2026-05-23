@@ -56,6 +56,8 @@ from utils.plotting import (
     plot_zonal_profile,
     plot_energy_spectrum
 )
+FORCING_AMP = 5e-7   # 起始值，后续可调
+FORCING_INTERVAL = 10
 
 
 def setup_output_dirs():
@@ -90,10 +92,22 @@ def run_simulation():
     
     for step in range(cfg.MAX_STEPS):
         # ── A. 更新外力場（Coriolis + 熱力）──
-        #update_forcing_kernel(cfg.F0, cfg.BETA, cfg.ALPHA_T)
+        update_forcing_kernel(cfg.F0, cfg.BETA, cfg.ALPHA_T)
 
         # ── B. 早期噪音擾動（觸發不穩定性）──
         #apply_noise_perturbation(step)
+        
+        # ---- 定期加入随机小尺度强迫（模拟对流能量注入） ----
+        if step % cfg.FORCING_INTERVAL == 0:
+            # 生成随机噪声场（幅度均匀分布）
+            rng = np.random.default_rng(step)
+            fx_noise = rng.uniform(-cfg.FORCING_AMP, cfg.FORCING_AMP,
+                                size=(cfg.NY, cfg.NX)).astype(np.float32)
+            fy_noise = rng.uniform(-cfg.FORCING_AMP, cfg.FORCING_AMP,
+                                size=(cfg.NY, cfg.NX)).astype(np.float32)
+            # 加到外力场上（注意：F 场已由 update_forcing_kernel 更新）
+            Fx_field.from_numpy(Fx_field.to_numpy() + fx_noise)
+            Fy_field.from_numpy(Fy_field.to_numpy() + fy_noise)
 
         # ── C. BGK 碰撞 + 串流（Loop Fusion）──
         bgk_collision_kernel(cfg.OMEGA)
@@ -134,15 +148,15 @@ def run_simulation():
 
             # 保存靜態圖
             u_mag = np.sqrt(ux_np**2 + uy_np**2)
-            plot_velocity_magnitude(ux_np, uy_np, step, save_path=f"output/frames/vel_{step:06d}.png")
-            plot_vorticity(omega_np, step, save_path=f"output/frames/vort_{step:06d}.png")
+            plot_velocity_magnitude(ux_np, uy_np, step, save_path=f"output/frames/vel_{step:06d}.jpg")
+            plot_vorticity(omega_np, step, save_path=f"output/frames/vort_{step:06d}.jpg")
             if step % cfg.SAVE_EVERY == 0:
                 ux_np = ux_field.to_numpy()
                 uy_np = uy_field.to_numpy()
                 u_mag = np.sqrt(ux_np**2 + uy_np**2)
                 print(f"Step {step}: |u| min={u_mag.min():.2e}, max={u_mag.max():.2e}")
-            # 每 5000 步保存剖面和能譜圖
-            if step % 5000 == 0:
+            # 每 20000 步保存剖面和能譜圖
+            if step % 20000 == 0:
                 plot_zonal_profile(zm['y'], zm['u_bar'], step, save_path=f"output/frames/zonal_{step:06d}.png")
                 plot_energy_spectrum(k_arr, E_arr, step, slope=slope, save_path=f"output/frames/spectrum_{step:06d}.png")
                 print(f"  Step {step:6d} | U_rms={u_rms:.5f} | Jets={jets} | E_slope={slope:.2f} | T_std={T_std:.4f}")

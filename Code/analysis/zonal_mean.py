@@ -37,17 +37,15 @@ def compute_zonal_mean() -> dict:
     }
 
 
-def count_jet_streams(u_bar: np.ndarray, threshold: float = 0.3) -> int:
-    """
-    計算帶狀平均速度剖面中的「噴射流」數量。
-    定義：|u_bar| 超過 U_MAX * threshold 的局部極值數。
-    """
-    u_norm = u_bar / max(np.abs(u_bar).max(), 1e-9)
-    peaks  = 0
-    for i in range(1, len(u_norm) - 1):
+def count_jet_streams(u_bar, threshold=0.8):
+    u_std = np.std(u_bar)
+    if u_std < 1e-9: return 0
+    u_norm = u_bar / u_std
+    peaks = 0
+    for i in range(1, len(u_norm)-1):
         if abs(u_norm[i]) > threshold:
-            if ((u_norm[i] > u_norm[i-1] and u_norm[i] > u_norm[i+1]) or
-                (u_norm[i] < u_norm[i-1] and u_norm[i] < u_norm[i+1])):
+            if (u_norm[i] > u_norm[i-1] and u_norm[i] > u_norm[i+1]) or \
+               (u_norm[i] < u_norm[i-1] and u_norm[i] < u_norm[i+1]):
                 peaks += 1
     return peaks
 
