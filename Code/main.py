@@ -136,7 +136,11 @@ def run_simulation():
             u_mag = np.sqrt(ux_np**2 + uy_np**2)
             plot_velocity_magnitude(ux_np, uy_np, step, save_path=f"output/frames/vel_{step:06d}.png")
             plot_vorticity(omega_np, step, save_path=f"output/frames/vort_{step:06d}.png")
-            
+            if step % cfg.SAVE_EVERY == 0:
+                ux_np = ux_field.to_numpy()
+                uy_np = uy_field.to_numpy()
+                u_mag = np.sqrt(ux_np**2 + uy_np**2)
+                print(f"Step {step}: |u| min={u_mag.min():.2e}, max={u_mag.max():.2e}")
             # 每 5000 步保存剖面和能譜圖
             if step % 5000 == 0:
                 plot_zonal_profile(zm['y'], zm['u_bar'], step, save_path=f"output/frames/zonal_{step:06d}.png")

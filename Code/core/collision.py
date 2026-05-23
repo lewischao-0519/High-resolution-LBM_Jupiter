@@ -103,51 +103,49 @@ def apply_periodic_bc_y():
 
 
 def init_fields():
-    """初始化 f / f_new 为一个或多个大尺度涡旋 + 小噪音"""
-    import numpy as np
-    from core.lattice import feq_single
-
-    # 1. 创建宏观速度场（大尺度涡旋）
-    ux_macro = np.zeros((cfg.NY, cfg.NX), dtype=np.float32)
-    uy_macro = np.zeros((cfg.NY, cfg.NX), dtype=np.float32)
-
-    # 选择一种涡旋：例如，一个覆盖整个域的大涡（单涡）
-    # 或者更好的：多个交替的涡旋，模拟湍流初始场
-    Lx = cfg.NX
-    Ly = cfg.NY
-    U0 = cfg.U_MAX * 0.5   # 初始速度振幅，比如 0.025
-    
-    # 创建一个正弦涡旋阵列 (波数 2 和 3)
-    X = np.arange(cfg.NX).reshape(1, -1)
-    Y = np.arange(cfg.NY).reshape(-1, 1)
-    kx = 2 * np.pi / Lx
-    ky = 2 * np.pi / Ly
-    # 第一个模式：大尺度 (波数 1)
-    ux_macro = U0 * np.sin(2 * kx * X) * np.cos(2 * ky * Y)
-    uy_macro = -U0 * np.cos(2 * kx * X) * np.sin(2 * ky * Y)
-    
-    # 可以叠加更多波数，增加复杂性
-    # ux_macro += 0.5*U0 * np.sin(4*kx*X) * np.cos(4*ky*Y)
-    # uy_macro += -0.5*U0 * np.cos(4*kx*X) * np.sin(4*ky*Y)
-
-    # 2. 从宏观速度场计算平衡分布 f_eq，并加上小噪声
-    rho0 = 1.0
-    f_np = np.zeros((9, cfg.NY, cfg.NX), dtype=np.float32)
-    for i in range(9):
-        f_eq = np.zeros((cfg.NY, cfg.NX), dtype=np.float32)
-        for y in range(cfg.NY):
-            for x in range(cfg.NX):
-                f_eq[y, x] = feq_single(i, rho0, ux_macro[y, x], uy_macro[y, x])
-        f_np[i] = f_eq
-
-    # 加入小噪声（幅度是初始速度的 1% 左右）
-    rng = np.random.default_rng(42)
-    noise_amp = U0 * 0.01
-    noise = rng.uniform(-noise_amp, noise_amp, size=(9, cfg.NY, cfg.NX)).astype(np.float32)
-    f_np += noise
-    f_np = np.clip(f_np, 1e-8, None)
-
-    f.from_numpy(f_np)
-    f_new.from_numpy(f_np)
-    Fx_field.fill(0.0)
+    """使用 GPU kernel 初始化分布函数（大尺度涡旋 + 噪声）"""
+    U0 = cfg.U_MAX * 0.5
+    init_fields_kernel(U0)          # 设置宏观涡旋
+    #add_noise_kernel(U0 * 0.01)     # 加入小噪声
+    clamp_fields_kernel()           # 裁剪负值（安全）
+    Fx_field.fill(0.0)              # 外力场清零
     Fy_field.fill(0.0)
+
+@ti.kernel
+def init_fields_kernel(U0: float):
+    """在 GPU 上初始化速度场（大尺度涡旋）和平衡分布函数"""
+    kx = 2.0 * ti.math.pi / cfg.NX
+    ky = 2.0 * ti.math.pi / cfg.NY
+    for y, x in ti.ndrange(cfg.NY, cfg.NX):
+        # 计算宏观速度：正弦涡旋（波数 2）
+        fx = ti.cast(x, ti.f32)
+        fy = ti.cast(y, ti.f32)
+        ux_macro = U0 * ti.sin(2.0 * kx * fx) * ti.cos(2.0 * ky * fy)
+        uy_macro = -U0 * ti.cos(2.0 * kx * fx) * ti.sin(2.0 * ky * fy)
+        rho = 1.0
+
+        # 对每个速度方向计算平衡分布
+        for i in ti.static(range(9)):
+            feq = feq_single(i, rho, ux_macro, uy_macro)
+            f[i, y, x] = feq
+            f_new[i, y, x] = feq
+
+        # 外力场初始化为零
+        Fx_field[y, x] = 0.0
+        Fy_field[y, x] = 0.0
+
+
+@ti.kernel
+def add_noise_kernel(amp: float):
+    """给分布函数添加均匀随机噪声，幅度为 amp"""
+    for i, y, x in ti.ndrange(9, cfg.NY, cfg.NX):
+        noise = (ti.random(ti.f32) - 0.5) * 2.0 * amp
+        f[i, y, x] += noise
+        f_new[i, y, x] += noise
+
+@ti.kernel
+def clamp_fields_kernel():
+    """裁剪分布函数中的极小负值（LBM 要求 f > 0）"""
+    for i, y, x in ti.ndrange(9, cfg.NY, cfg.NX):
+        f[i, y, x] = ti.max(f[i, y, x], 1e-8)
+        f_new[i, y, x] = ti.max(f_new[i, y, x], 1e-8)
