@@ -90,10 +90,10 @@ def run_simulation():
     
     for step in range(cfg.MAX_STEPS):
         # ── A. 更新外力場（Coriolis + 熱力）──
-        update_forcing_kernel(cfg.F0, cfg.BETA, cfg.ALPHA_T)
+        #update_forcing_kernel(cfg.F0, cfg.BETA, cfg.ALPHA_T)
 
         # ── B. 早期噪音擾動（觸發不穩定性）──
-        apply_noise_perturbation(step)
+        #apply_noise_perturbation(step)
 
         # ── C. BGK 碰撞 + 串流（Loop Fusion）──
         bgk_collision_kernel(cfg.OMEGA)
@@ -102,8 +102,8 @@ def run_simulation():
         # 注意：已删除 apply_periodic_bc_y()（多余的）
 
         # ── D. 溫度場演化（每步）──
-        advect_temperature_kernel(1.0)
-        relax_temperature_kernel(cfg.T0, cfg.DELTA_T, 5e-5)
+        #advect_temperature_kernel(1.0)
+        #relax_temperature_kernel(cfg.T0, cfg.DELTA_T, 5e-5)
 
         # ── E. 每 SAVE_EVERY 步做記錄與保存靜態圖 ──
         if step % cfg.SAVE_EVERY == 0:
