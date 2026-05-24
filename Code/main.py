@@ -30,8 +30,8 @@ from core.collision import (
     f, f_new,
     rho_field, ux_field, uy_field,
     Fx_field, Fy_field,
-    init_fields, bgk_collision_kernel, swap_fields,
-    apply_periodic_bc_y
+    init_fields, bgk_collision_kernel,apply_boundary_y_free_slip, swap_fields,
+    compute_macro,apply_periodic_bc_y
 )
 from core.forcing import update_forcing_kernel, apply_noise_perturbation
 
@@ -98,20 +98,22 @@ def run_simulation():
         #apply_noise_perturbation(step)
         
         # ---- 定期加入随机小尺度强迫（模拟对流能量注入） ----
-        if step % cfg.FORCING_INTERVAL == 0:
-            # 生成随机噪声场（幅度均匀分布）
-            rng = np.random.default_rng(step)
-            fx_noise = rng.uniform(-cfg.FORCING_AMP, cfg.FORCING_AMP,
-                                size=(cfg.NY, cfg.NX)).astype(np.float32)
-            fy_noise = rng.uniform(-cfg.FORCING_AMP, cfg.FORCING_AMP,
-                                size=(cfg.NY, cfg.NX)).astype(np.float32)
-            # 加到外力场上（注意：F 场已由 update_forcing_kernel 更新）
-            Fx_field.from_numpy(Fx_field.to_numpy() + fx_noise)
-            Fy_field.from_numpy(Fy_field.to_numpy() + fy_noise)
+        #if step % cfg.FORCING_INTERVAL == 0:
+        #    # 生成随机噪声场（幅度均匀分布）
+        #    rng = np.random.default_rng(step)
+        #    fx_noise = rng.uniform(-cfg.FORCING_AMP, cfg.FORCING_AMP,
+        #                        size=(cfg.NY, cfg.NX)).astype(np.float32)
+        #    fy_noise = rng.uniform(-cfg.FORCING_AMP, cfg.FORCING_AMP,
+        #                        size=(cfg.NY, cfg.NX)).astype(np.float32)
+        #    # 加到外力场上（注意：F 场已由 update_forcing_kernel 更新）
+        #    Fx_field.from_numpy(Fx_field.to_numpy() + fx_noise)
+        #    Fy_field.from_numpy(Fy_field.to_numpy() + fy_noise)
 
         # ── C. BGK 碰撞 + 串流（Loop Fusion）──
         bgk_collision_kernel(cfg.OMEGA)
+        apply_boundary_y_free_slip() 
         swap_fields()
+        compute_macro()
 
         # 注意：已删除 apply_periodic_bc_y()（多余的）
 
