@@ -126,19 +126,6 @@ def compute_macro():
         ux_field[y, x] = vx + 0.5 * Fx_field[y, x] / rho
         uy_field[y, x] = vy + 0.5 * Fy_field[y, x] / rho
 
-@ti.kernel
-def apply_periodic_bc_y():
-    """
-    y 方向週期邊界條件（若不用週期，可改為固壁或 open BC）
-    bgk_collision_kernel 中的 py = (y-cy+NY)%NY 已隱含週期，
-    此 kernel 保留供顯式修正使用。
-    """
-    for x in range(cfg.NX):
-        for i in ti.static(range(9)):
-            f[i, 0,        x] = f[i, cfg.NY-2, x]
-            f[i, cfg.NY-1, x] = f[i, 1,        x]
-
-
 def init_fields():
     """使用 GPU kernel 初始化分布函数（大尺度涡旋 + 噪声）"""
     U0 = cfg.U_MAX * 0.5
@@ -147,42 +134,3 @@ def init_fields():
     clamp_fields_kernel()           # 裁剪负值（安全）
     Fx_field.fill(0.0)              # 外力场清零
     Fy_field.fill(0.0)
-
-@ti.kernel
-def init_fields_kernel(U0: float):
-    """在 GPU 上初始化速度场（大尺度涡旋）和平衡分布函数"""
-    kx = 2.0 * ti.math.pi / cfg.NX
-    ky = 2.0 * ti.math.pi / cfg.NY
-    for y, x in ti.ndrange(cfg.NY, cfg.NX):
-        # 计算宏观速度：正弦涡旋（波数 2）
-        fx = ti.cast(x, ti.f32)
-        fy = ti.cast(y, ti.f32)
-        ux_macro = U0 * ti.sin(2.0 * kx * fx) * ti.cos(2.0 * ky * fy)
-        uy_macro = -U0 * ti.cos(2.0 * kx * fx) * ti.sin(2.0 * ky * fy)
-        rho = 1.0
-
-        # 对每个速度方向计算平衡分布
-        for i in ti.static(range(9)):
-            feq = feq_single(i, rho, ux_macro, uy_macro)
-            f[i, y, x] = feq
-            f_new[i, y, x] = feq
-
-        # 外力场初始化为零
-        Fx_field[y, x] = 0.0
-        Fy_field[y, x] = 0.0
-
-
-@ti.kernel
-def add_noise_kernel(amp: float):
-    """给分布函数添加均匀随机噪声，幅度为 amp"""
-    for i, y, x in ti.ndrange(9, cfg.NY, cfg.NX):
-        noise = (ti.random(ti.f32) - 0.5) * 2.0 * amp
-        f[i, y, x] += noise
-        f_new[i, y, x] += noise
-
-@ti.kernel
-def clamp_fields_kernel():
-    """裁剪分布函数中的极小负值（LBM 要求 f > 0）"""
-    for i, y, x in ti.ndrange(9, cfg.NY, cfg.NX):
-        f[i, y, x] = ti.max(f[i, y, x], 1e-8)
-        f_new[i, y, x] = ti.max(f_new[i, y, x], 1e-8)

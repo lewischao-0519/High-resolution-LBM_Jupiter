@@ -47,22 +47,3 @@ def update_forcing_kernel(f0: float, beta: float, alpha_t: float):
 
         Fx_field[y, x] = fx_cor
         Fy_field[y, x] = fy_cor + fy_th
-
-
-def apply_noise_perturbation(step: int):
-    """
-    在初始階段（step < 500）注入小隨機噪音到外力場，
-    加速帶狀流不穩定性觸發（對應 PDF §7 ε 參數）。
-    """
-    if step >= 500:
-        return
-    from core.collision import Fx_field, Fy_field
-    ny, nx = cfg.NY, cfg.NX
-    rng = np.random.default_rng(step)
-    amp = cfg.NOISE_AMP * (1.0 - step / 500.0)   # 逐漸衰減
-    noise = rng.uniform(-amp, amp, size=(ny, nx)).astype(np.float32)
-    # 以 NumPy 加噪後重新上傳（只在初期，不影響效能）
-    fx_np = Fx_field.to_numpy() + noise
-    fy_np = Fy_field.to_numpy() + noise
-    Fx_field.from_numpy(fx_np)
-    Fy_field.from_numpy(fy_np)

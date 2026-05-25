@@ -3,7 +3,7 @@
 # 注意：本專案採用「Loop Fusion」策略，串流與碰撞合併在
 # collision.py 的 bgk_collision_kernel 中（Pull-scheme）。
 # 本檔案提供獨立串流 kernel，供除錯或 MRT 碰撞使用。
-#
+
 import taichi as ti
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))

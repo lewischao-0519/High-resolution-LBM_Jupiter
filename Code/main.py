@@ -18,18 +18,9 @@ from core.collision import (
     rho_field, ux_field, uy_field,
     Fx_field, Fy_field,
     init_fields, bgk_collision_kernel,apply_boundary_y_free_slip, swap_fields,
-    compute_macro,apply_periodic_bc_y
+    compute_macro
 )
 from core.forcing import update_forcing_kernel, apply_noise_perturbation
-
-# ── 物理模組 ──
-from physics.thermal import (
-    T_field,
-    init_temperature,
-    advect_temperature_kernel,
-    relax_temperature_kernel
-)
-from physics.nondimensional import print_dimensionless_summary
 
 # ── 分析模組 ──
 from analysis.vorticity  import get_vorticity_numpy
@@ -43,9 +34,6 @@ from utils.plotting import (
     plot_zonal_profile,
     plot_energy_spectrum
 )
-FORCING_AMP = 5e-7   # 起始值，后续可调
-FORCING_INTERVAL = 10
-
 
 def setup_output_dirs():
     """建立輸出資料夾"""
@@ -58,7 +46,6 @@ def run_simulation():
     print("🪐 Jupiter LBM Simulation — initializing...")
     init_constants()
     init_fields()
-    init_temperature()
     setup_output_dirs()
 
     print_dimensionless_summary()
@@ -81,34 +68,13 @@ def run_simulation():
         # ── A. 更新外力場（Coriolis + 熱力）──
         update_forcing_kernel(cfg.F0, cfg.BETA, cfg.ALPHA_T)
 
-        # ── B. 早期噪音擾動（觸發不穩定性）──
-        #apply_noise_perturbation(step)
-        
-        # ---- 定期加入随机小尺度强迫（模拟对流能量注入） ----
-        #if step % cfg.FORCING_INTERVAL == 0:
-        #    # 生成随机噪声场（幅度均匀分布）
-        #    rng = np.random.default_rng(step)
-        #    fx_noise = rng.uniform(-cfg.FORCING_AMP, cfg.FORCING_AMP,
-        #                        size=(cfg.NY, cfg.NX)).astype(np.float32)
-        #    fy_noise = rng.uniform(-cfg.FORCING_AMP, cfg.FORCING_AMP,
-        #                        size=(cfg.NY, cfg.NX)).astype(np.float32)
-        #    # 加到外力场上（注意：F 场已由 update_forcing_kernel 更新）
-        #    Fx_field.from_numpy(Fx_field.to_numpy() + fx_noise)
-        #    Fy_field.from_numpy(Fy_field.to_numpy() + fy_noise)
-
-        # ── C. BGK 碰撞 + 串流（Loop Fusion）──
+        # ── B. BGK 碰撞 + 串流（Loop Fusion）──
         bgk_collision_kernel(cfg.OMEGA)
         apply_boundary_y_free_slip() 
         swap_fields()
         compute_macro()
 
-        # 注意：已删除 apply_periodic_bc_y()（多余的）
-
-        # ── D. 溫度場演化（每步）──
-        #advect_temperature_kernel(1.0)
-        #relax_temperature_kernel(cfg.T0, cfg.DELTA_T, 5e-5)
-
-        # ── E. 每 SAVE_EVERY 步做記錄與保存靜態圖 ──
+        # ── C. 每 SAVE_EVERY 步做記錄與保存靜態圖 ──
         if step % cfg.SAVE_EVERY == 0:
             ux_np = ux_field.to_numpy()
             uy_np = uy_field.to_numpy()
