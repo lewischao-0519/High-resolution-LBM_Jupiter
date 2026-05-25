@@ -10,8 +10,6 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import config as cfg
 from core.collision import Fx_field, Fy_field, ux_field, uy_field, rho_field
-from physics.thermal import T_field   # 溫度場由 thermal.py 維護
-
 
 @ti.kernel
 def update_forcing_kernel(f0: float, beta: float, alpha_t: float):
@@ -41,9 +39,5 @@ def update_forcing_kernel(f0: float, beta: float, alpha_t: float):
         fx_cor  =  f_cor * uy
         fy_cor  = -f_cor * ux
 
-        # 熱力浮力（簡化：僅 y 方向）
-        T_loc   = T_field[y, x]
-        fy_th   = alpha_t * (T_loc - cfg.T0)
-
         Fx_field[y, x] = fx_cor
-        Fy_field[y, x] = fy_cor + fy_th
+        Fy_field[y, x] = fy_cor 

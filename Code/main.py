@@ -48,8 +48,6 @@ def run_simulation():
     init_fields()
     setup_output_dirs()
 
-    print_dimensionless_summary()
-
     # ── 2. 資料記錄器 ──
     log = {
         'step'        : [],
@@ -60,13 +58,12 @@ def run_simulation():
     }
     # 用於計算渦流通量的歷史資料（保留最近 10 幀）
     velocity_history = []
-
     # ── 影片設定（已禁用，仅保存静态图）──
     print(f"🚀 Starting main loop  (MAX_STEPS={cfg.MAX_STEPS}) ... (video disabled)")
     
     for step in range(cfg.MAX_STEPS):
         # ── A. 更新外力場（Coriolis + 熱力）──
-        update_forcing_kernel(cfg.F0, cfg.BETA, cfg.ALPHA_T)
+        #update_forcing_kernel(cfg.F0, cfg.BETA, cfg.ALPHA_T)
 
         # ── B. BGK 碰撞 + 串流（Loop Fusion）──
         bgk_collision_kernel(cfg.OMEGA)
@@ -87,9 +84,6 @@ def run_simulation():
             # 能量譜
             k_arr, E_arr = compute_energy_spectrum(ux_np, uy_np)
             slope        = kolmogorov_slope(k_arr, E_arr)
-
-            # 溫度統計
-            T_std = float(T_field.to_numpy().std())
 
             # 記錄
             log['step'].append(step)
