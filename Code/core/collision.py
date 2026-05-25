@@ -27,21 +27,42 @@ Fy_field = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
 def bgk_collision_kernel(omega: float):
     """
     Pull-scheme 串流 + BGK 碰撞 + 外力修正（Guo's forcing scheme）
+    含 y 方向自由滑移边界（通过反射拉取实现）
     """
     for y, x in rho_field:
-        # ── Pull-scheme 串流 ──
+        # ── Pull-scheme 串流（含边界反射）──
         f_local = ti.Vector([0.0] * 9)
-        for i in ti.static(range(9)):           # ← 這個迴圈不能刪！
-            px = (x - cfg.CX[i] + cfg.NX) % cfg.NX   # x 方向週期
-            py = y - cfg.CY[i]                       # y 方向不做模運算
-            
-            # 檢查 y 是否越界
-            if 0 <= py < cfg.NY:
-                f_local[i] = f[i, py, px]
-            else:
-                f_local[i] = 0.0  # 越界暫時設 0，等邊界 kernel 處理
+        for i in ti.static(range(9)):
+            px = (x - cfg.CX[i] + cfg.NX) % cfg.NX   # x 方向周期边界
+            py = y - cfg.CY[i]
 
-        # ── 計算宏觀量 ──
+            # 处理 y 方向自由滑移边界（反射）
+            if py < 0:
+                # 下边界 y=0: 反射 cy>0 的方向
+                if i == 2:          # 向上 (0,1)
+                    f_local[i] = f[4, y, x]   # 映射到向下 (0,-1)
+                elif i == 5:        # 右上 (1,1)
+                    f_local[i] = f[7, y, x]   # 映射到左下 (-1,-1)
+                elif i == 6:        # 左上 (-1,1)
+                    f_local[i] = f[8, y, x]   # 映射到右下 (1,-1)
+                else:
+                    # 其他方向不会越界，但保留原值以防万一
+                    f_local[i] = f[i, y, x]
+            elif py >= cfg.NY:
+                # 上边界 y=NY-1: 反射 cy<0 的方向
+                if i == 4:          # 向下 (0,-1)
+                    f_local[i] = f[2, y, x]   # 映射到向上 (0,1)
+                elif i == 7:        # 左下 (-1,-1)
+                    f_local[i] = f[5, y, x]   # 映射到右上 (1,1)
+                elif i == 8:        # 右下 (1,-1)
+                    f_local[i] = f[6, y, x]   # 映射到左上 (-1,1)
+                else:
+                    f_local[i] = f[i, y, x]
+            else:
+                # 内部点：正常拉取
+                f_local[i] = f[i, py, px]
+
+        # ── 计算宏观量 ──
         rho = 0.0
         vx  = 0.0
         vy  = 0.0
@@ -53,7 +74,7 @@ def bgk_collision_kernel(omega: float):
         vx /= rho
         vy /= rho
 
-        # ── 讀取外力場 ──
+        # ── 读取外力场 ──
         fx = Fx_field[y, x]
         fy = Fy_field[y, x]
 
@@ -77,7 +98,7 @@ def bgk_collision_kernel(omega: float):
                 + (1.0 - 0.5*omega) * guo
             )
 
-        # ── 只儲存密度（速度等邊界處理完再算）──
+        # ── 存储密度（速度等边界处理完再算）──
         rho_field[y, x] = rho
 
 @ti.kernel

@@ -67,7 +67,7 @@ def run_simulation():
 
         # ── B. BGK 碰撞 + 串流（Loop Fusion）──
         bgk_collision_kernel(cfg.OMEGA)
-        apply_boundary_y_free_slip() 
+        #apply_boundary_y_free_slip() 
         swap_fields()
         compute_macro()
 
