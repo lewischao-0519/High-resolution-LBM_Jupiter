@@ -1,16 +1,3 @@
-# main.py  ── Jupiter LBM 主程式
-# 對應 PDF §8 研究時程與 §11 程式架構
-#
-# 資料流：
-#   config.py
-#     └─ core/collision.py  (f, rho, ux, uy fields)
-#          ├─ core/forcing.py  → Fx, Fy fields
-#          │    ├─ physics/coriolis.py
-#          │    └─ physics/thermal.py  (T_field)
-#          └─ bgk_collision_kernel(omega)
-#     └─ analysis/ (vorticity, spectrum, zonal_mean)
-#     └─ utils/   (plotting)
-#
 import os, sys
 import numpy as np
 import matplotlib
@@ -195,10 +182,6 @@ def _save_summary(log: dict):
     axes[1, 0].legend(fontsize=8)
     axes[1, 0].grid(True, linestyle='--', alpha=0.5)
 
-    axes[1, 1].plot(steps, log['T_std'], color='purple')
-    axes[1, 1].set_title("Temperature Std Dev")
-    axes[1, 1].set_ylabel("std(T)")
-    axes[1, 1].grid(True, linestyle='--', alpha=0.5)
 
     for ax in axes.flat:
         ax.set_xlabel("Step")
