@@ -20,7 +20,7 @@ from core.collision import (
     init_fields, bgk_collision_kernel,apply_boundary_y_free_slip, swap_fields,
     compute_macro
 )
-from core.forcing import update_forcing_kernel, apply_noise_perturbation
+#from core.forcing import update_forcing_kernel
 
 # ── 分析模組 ──
 from analysis.vorticity  import get_vorticity_numpy
@@ -90,7 +90,6 @@ def run_simulation():
             log['u_rms'].append(u_rms)
             log['jet_count'].append(jets)
             log['E_slope'].append(slope if not np.isnan(slope) else 0.0)
-            log['T_std'].append(T_std)
 
             # 渦度
             omega_np = get_vorticity_numpy()
@@ -108,7 +107,7 @@ def run_simulation():
             if step % 20000 == 0:
                 plot_zonal_profile(zm['y'], zm['u_bar'], step, save_path=f"output/frames/zonal_{step:06d}.png")
                 plot_energy_spectrum(k_arr, E_arr, step, slope=slope, save_path=f"output/frames/spectrum_{step:06d}.png")
-                print(f"  Step {step:6d} | U_rms={u_rms:.5f} | Jets={jets} | E_slope={slope:.2f} | T_std={T_std:.4f}")
+                print(f"  Step {step:6d} | U_rms={u_rms:.5f} | Jets={jets} | E_slope={slope:.2f}")
 
     print("✅ Simulation done! Generating summary plots...")
     _save_summary(log)
