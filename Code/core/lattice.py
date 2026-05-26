@@ -20,8 +20,7 @@ def feq_single(i: int, rho: float, ux: float, uy: float) -> float:
     cu  = float(cfg.CX[i]) * ux + float(cfg.CY[i]) * uy
     u2  = ux * ux + uy * uy
     return rho * cfg.W[i] * (1.0 + 3.0*cu + 4.5*cu*cu - 1.5*u2)
-
-
+    
 @ti.func
 def compute_macro(f_local: ti.template()) -> ti.Vector:
     """

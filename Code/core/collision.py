@@ -49,8 +49,10 @@ def forcing_moments(ux: float, uy: float, Fx: float, Fy: float):
         -Fx,
         Fy,
         -Fy,
-        2.0 * (ux*Fx - uy*Fy),
-        ux*Fy + uy*Fx
+        0,
+        0
+        #2.0 * (ux*Fx - uy*Fy),
+        #ux*Fy + uy*Fx
     ])
 
 @ti.kernel
