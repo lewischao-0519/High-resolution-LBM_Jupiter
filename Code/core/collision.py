@@ -6,8 +6,7 @@ import numpy as np
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import config as cfg
-from core.lattice import feq_single
-
+from core.lattice import feq_single, M, M_inv
 # ── 全域分佈函數 fields（GPU 常駐）──
 #    shape=(9, NY, NX)：第 0 維為速度方向，第 1 維為 y，第 2 維為 x
 f     = ti.field(ti.f32, shape=(9, cfg.NY, cfg.NX))
@@ -23,49 +22,79 @@ Fx_field = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
 Fy_field = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
 
 
+@ti.func
+def meq(rho: float, ux: float, uy: float):   # 无返回类型注解
+    jx = rho * ux
+    jy = rho * uy
+    j2 = jx*jx + jy*jy
+    m0 = rho
+    m1 = -2.0*rho + 3.0 * j2 / rho
+    m2 = rho - 3.0 * j2 / rho
+    m3 = jx
+    m4 = -jx
+    m5 = jy
+    m6 = -jy
+    m7 = (jx*jx - jy*jy) / rho
+    m8 = (jx*jy) / rho
+    return ti.Vector([m0, m1, m2, m3, m4, m5, m6, m7, m8])
+
+@ti.func
+def forcing_moments(ux: float, uy: float, Fx: float, Fy: float):
+    uF = ux*Fx + uy*Fy
+    return ti.Vector([
+        0.0,
+        6.0 * uF,
+        -6.0 * uF,
+        Fx,
+        -Fx,
+        Fy,
+        -Fy,
+        2.0 * (ux*Fx - uy*Fy),
+        ux*Fy + uy*Fx
+    ])
+
 @ti.kernel
-def bgk_collision_kernel(omega: float):
+def mrt_collision_kernel(
+    omega_shear: float,      # 用于 s7 = s8 = omega_shear
+    s1: float, s2: float, s4: float, s6: float):
     """
-    Pull-scheme 串流 + BGK 碰撞 + 外力修正（Guo's forcing scheme）
-    含 y 方向自由滑移边界（通过反射拉取实现）
+    MRT 碰撞 + Pull Streaming + 边界反射（y方向自由滑移）
+    同时计算宏观量并存储到 rho_field, ux_field, uy_field
+    外力从 Fx_field, Fy_field 读取（由 forcing 模块预填）
     """
     for y, x in rho_field:
-        # ── Pull-scheme 串流（含边界反射）──
+        # ========== 1. Pull streaming + 自由滑移边界反射 ==========
         f_local = ti.Vector([0.0] * 9)
         for i in ti.static(range(9)):
-            px = (x - cfg.CX[i] + cfg.NX) % cfg.NX   # x 方向周期边界
+            px = (x - cfg.CX[i] + cfg.NX) % cfg.NX
             py = y - cfg.CY[i]
 
-            # 处理 y 方向自由滑移边界（反射）
-            if py < 0:
-                # 下边界 y=0: 反射 cy>0 的方向
-                if i == 2:          # 向上 (0,1)
-                    f_local[i] = f[4, y, x]   # 映射到向下 (0,-1)
-                elif i == 5:        # 右上 (1,1)
-                    f_local[i] = f[7, y, x]   # 映射到左下 (-1,-1)
-                elif i == 6:        # 左上 (-1,1)
-                    f_local[i] = f[8, y, x]   # 映射到右下 (1,-1)
+            if py < 0:   # 下边界自由滑移（鏡面反射：只翻轉 y 分量）
+                if i == 2:          # (0,+1) → (0,-1) = i=4
+                    f_local[i] = f[4, y, x]
+                elif i == 5:        # (+1,+1) → (+1,-1) = i=8  ← 原本錯寫成 i=7
+                    f_local[i] = f[8, y, x]
+                elif i == 6:        # (-1,+1) → (-1,-1) = i=7  ← 原本錯寫成 i=8
+                    f_local[i] = f[7, y, x]
                 else:
-                    # 其他方向不会越界，但保留原值以防万一
                     f_local[i] = f[i, y, x]
-            elif py >= cfg.NY:
-                # 上边界 y=NY-1: 反射 cy<0 的方向
-                if i == 4:          # 向下 (0,-1)
-                    f_local[i] = f[2, y, x]   # 映射到向上 (0,1)
-                elif i == 7:        # 左下 (-1,-1)
-                    f_local[i] = f[5, y, x]   # 映射到右上 (1,1)
-                elif i == 8:        # 右下 (1,-1)
-                    f_local[i] = f[6, y, x]   # 映射到左上 (-1,1)
+            elif py >= cfg.NY:  # 上边界自由滑移（鏡面反射：只翻轉 y 分量）
+                if i == 4:          # (0,-1) → (0,+1) = i=2
+                    f_local[i] = f[2, y, x]
+                elif i == 7:        # (-1,-1) → (-1,+1) = i=6  ← 原本錯寫成 i=5
+                    f_local[i] = f[6, y, x]
+                elif i == 8:        # (+1,-1) → (+1,+1) = i=5  ← 原本錯寫成 i=6
+                    f_local[i] = f[5, y, x]
                 else:
                     f_local[i] = f[i, y, x]
             else:
-                # 内部点：正常拉取
+                # 正常内部点
                 f_local[i] = f[i, py, px]
 
-        # ── 计算宏观量 ──
+        # ========== 2. 计算宏观密度与速度 ==========
         rho = 0.0
-        vx  = 0.0
-        vy  = 0.0
+        vx = 0.0
+        vy = 0.0
         for i in ti.static(range(9)):
             rho += f_local[i]
             vx  += f_local[i] * float(cfg.CX[i])
@@ -74,87 +103,59 @@ def bgk_collision_kernel(omega: float):
         vx /= rho
         vy /= rho
 
-        # ── 读取外力场 ──
-        fx = Fx_field[y, x]
-        fy = Fy_field[y, x]
+        # ========== 3. 读取外力（由 forcing 模块预计算） ==========
+        Fx = Fx_field[y, x]
+        Fy = Fy_field[y, x]
 
-        # ── BGK 碰撞 + Guo forcing ──
-        u2 = vx*vx + vy*vy
+        # ========== 4. MRT 碰撞 ==========
+        # ===== 4.1 计算矩 m = M * f_local =====
+        m = ti.Vector.zero(ti.f32, 9)
+        for i in ti.static(range(9)):       # i 是矩索引 (0..8)
+            total = 0.0
+            for j in ti.static(range(9)):   # j 是分布函数索引 (0..8)
+                total += M[i, j] * f_local[j]
+            m[i] = total
+
+        # 4.2 平衡态矩 meq
+        meq_vec = meq(rho, vx, vy)
+
+        # 4.3 外力矩 Fm
+        Fm_vec = forcing_moments(vx, vy, Fx, Fy)
+
+        # 4.4 松弛矩阵 S（对角元）
+        S = ti.Vector([
+            1.0, s1, s2,        # m0, m1, m2
+            1.0, s4,            # m3, m4
+            1.0, s6,            # m5, m6
+            omega_shear, omega_shear  # m7, m8
+        ])
+
+        # 4.5 矩松弛: m* = m - S*(m - meq) + (I - S/2)*Fm
+        m_star = ti.Vector.zero(ti.f32, 9)
         for i in ti.static(range(9)):
-            ci_x = float(cfg.CX[i])
-            ci_y = float(cfg.CY[i])
-            cu   = ci_x*vx + ci_y*vy
-            feq  = rho * cfg.W[i] * (1.0 + 3.0*cu + 4.5*cu*cu - 1.5*u2)
+            m_star[i] = m[i] - S[i]*(m[i] - meq_vec[i]) + (1.0 - 0.5*S[i]) * Fm_vec[i]
 
-            # Guo's forcing term
-            guo = cfg.W[i] * (
-                3.0 * ((ci_x - vx)*fx + (ci_y - vy)*fy)
-                + 9.0 * cu * (ci_x*fx + ci_y*fy)
-            )
-
-            f_new[i, y, x] = (
-                f_local[i] * (1.0 - omega)
-                + feq * omega
-                + (1.0 - 0.5*omega) * guo
-            )
-
-        # ── 存储密度（速度等边界处理完再算）──
-        rho_field[y, x] = rho
-
-@ti.kernel
-def apply_boundary_y_free_slip():
-    """
-    y 方向自由滑移邊界（南北極牆面）
-    使用 half-way bounce-back 規則，保持切向動量，反轉法向動量
-    """
-    for x in range(cfg.NX):
-        # ── 下邊界 y = 0 ──
-        # 方向 2 (往上，cy=1) 從邊界反彈到方向 4 (往下，cy=-1)
-        f_new[4, 0, x] = f_new[2, 0, x]
-        # 方向 5 (右上，cx=1,cy=1) → 方向 7 (左下，cx=-1,cy=-1)
-        f_new[7, 0, x] = f_new[5, 0, x]
-        # 方向 6 (左上，cx=-1,cy=1) → 方向 8 (右下，cx=1,cy=-1)
-        f_new[8, 0, x] = f_new[6, 0, x]
+        # 4.6 逆变换
+        for i in ti.static(range(9)):
+            val = 0.0
+            for j in ti.static(range(9)):
+                val += M_inv[i, j] * m_star[j]
+            f_new[i, y, x] = ti.max(val, 1e-12)
         
-        # ── 上邊界 y = NY-1 ──
-        # 方向 4 (往下，cy=-1) → 方向 2 (往上，cy=1)
-        f_new[2, cfg.NY-1, x] = f_new[4, cfg.NY-1, x]
-        # 方向 7 (左下，cx=-1,cy=-1) → 方向 5 (右上，cx=1,cy=1)
-        f_new[5, cfg.NY-1, x] = f_new[7, cfg.NY-1, x]
-        # 方向 8 (右下，cx=1,cy=-1) → 方向 6 (左上，cx=-1,cy=1)
-        f_new[6, cfg.NY-1, x] = f_new[8, cfg.NY-1, x]
+        # ========== 5. 存储宏观量（供 forcing 和诊断使用） ==========
+        rho_field[y, x] = rho
+        # Guo 格式修正速度：u = (j/rho) + F/(2rho)
+        ux_field[y, x] = vx + 0.5 * Fx / rho
+        uy_field[y, x] = vy + 0.5 * Fy / rho
 
 @ti.kernel
 def swap_fields():
-    """交換 f 與 f_new"""
     for i, y, x in f:
         f[i, y, x], f_new[i, y, x] = f_new[i, y, x], f[i, y, x]
-
-@ti.kernel
-def compute_macro():
-    for y, x in rho_field:
-        rho = 0.0
-        vx  = 0.0
-        vy  = 0.0
-        for i in ti.static(range(9)):
-            rho += f_new[i, y, x]
-            vx  += f_new[i, y, x] * float(cfg.CX[i])
-            vy  += f_new[i, y, x] * float(cfg.CY[i])
-        rho = ti.max(rho, 1e-6)
-        vx /= rho
-        vy /= rho
-        rho_field[y, x] = rho
-        ux_field[y, x] = vx + 0.5 * Fx_field[y, x] / rho
-        uy_field[y, x] = vy + 0.5 * Fy_field[y, x] / rho
-
-def init_fields():
-    """使用 GPU kernel 初始化分布函数（大尺度涡旋 + 噪声）"""
-    U0 = cfg.U_MAX * 0.5
-    init_fields_kernel(U0)          # 设置宏观涡旋
-    #add_noise_kernel(U0 * 0.01)     # 加入小噪声
-    clamp_fields_kernel()           # 裁剪负值（安全）
-    Fx_field.fill(0.0)              # 外力场清零
-    Fy_field.fill(0.0)
+    """裁剪分布函数中的极小负值（LBM 要求 f > 0）"""
+    for i, y, x in ti.ndrange(9, cfg.NY, cfg.NX):
+        f[i, y, x] = ti.max(f[i, y, x], 1e-8)
+        f_new[i, y, x] = ti.max(f_new[i, y, x], 1e-8)
 
 @ti.kernel
 def init_fields_kernel(U0: float):
@@ -162,14 +163,12 @@ def init_fields_kernel(U0: float):
     kx = 2.0 * ti.math.pi / cfg.NX
     ky = 2.0 * ti.math.pi / cfg.NY
     for y, x in ti.ndrange(cfg.NY, cfg.NX):
-        # 计算宏观速度：正弦涡旋（波数 2）
         fx = ti.cast(x, ti.f32)
         fy = ti.cast(y, ti.f32)
         ux_macro = U0 * ti.sin(2.0 * kx * fx) * ti.cos(2.0 * ky * fy)
         uy_macro = -U0 * ti.cos(2.0 * kx * fx) * ti.sin(2.0 * ky * fy)
         rho = 1.0
 
-        # 对每个速度方向计算平衡分布
         for i in ti.static(range(9)):
             feq = feq_single(i, rho, ux_macro, uy_macro)
             f[i, y, x] = feq
@@ -181,7 +180,17 @@ def init_fields_kernel(U0: float):
 
 @ti.kernel
 def clamp_fields_kernel():
-    """裁剪分布函数中的极小负值（LBM 要求 f > 0）"""
+    """裁剪极小负值（安全）"""
     for i, y, x in ti.ndrange(9, cfg.NY, cfg.NX):
         f[i, y, x] = ti.max(f[i, y, x], 1e-8)
         f_new[i, y, x] = ti.max(f_new[i, y, x], 1e-8)
+
+def init_fields():
+    """初始化入口：设置宏观涡旋 + 裁剪"""
+    U0 = cfg.U_MAX * 0.5
+    init_fields_kernel(U0)
+    # add_noise_kernel(U0 * 0.01)   # 可选噪声
+    clamp_fields_kernel()
+    # 确保外力场清零（虽然 kernel 里已经做了，但再显式一下）
+    Fx_field.fill(0.0)
+    Fy_field.fill(0.0)

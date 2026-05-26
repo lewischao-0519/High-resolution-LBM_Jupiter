@@ -12,21 +12,17 @@ import config as cfg
 from core.collision import Fx_field, Fy_field, ux_field, uy_field, rho_field
 
 @ti.kernel
-def update_forcing_kernel(f0: float, beta: float, alpha_t: float):
+def update_forcing_kernel(f0: float, beta: float):
     """
     計算每個格點的合力並寫入 Fx_field / Fy_field。
 
     力的組成（對應 PDF §3, Eq.1）：
       F = F_Coriolis + F_thermal
     
-    Coriolis（β-plane，對應 Eq.2）：
+    Coriolis（β-plane）：
       f(y) = f0 + β * (y - NY/2)          ← 緯度偏移，赤道在中央
       F_cor_x = +f(y) * uy                ← z×u 的 x 分量（2D投影）
       F_cor_y = -f(y) * ux                ← z×u 的 y 分量
-    
-    熱力（對應 §5 Eq.5）：
-      F_th = -α * ∇T  ← 此處簡化為 y 方向浮力
-      F_th_y = alpha_t * (T - T0)        ← 浮力（暖→上升）
     """
     ny_half = cfg.NY // 2
     for y, x in rho_field:
@@ -38,6 +34,5 @@ def update_forcing_kernel(f0: float, beta: float, alpha_t: float):
         f_cor   = f0 + beta * dy
         fx_cor  =  f_cor * uy
         fy_cor  = -f_cor * ux
-
-        Fx_field[y, x] = fx_cor
-        Fy_field[y, x] = fy_cor 
+        Fx_field[y, x] = fx_cor  # 科氏力 x 分量
+        Fy_field[y, x] = -fy_cor # 科氏力 y 分量

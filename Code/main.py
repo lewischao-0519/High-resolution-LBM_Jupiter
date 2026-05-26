@@ -11,17 +11,15 @@ sys.path.insert(0, ROOT)
 
 import config as cfg
 from config import init_constants
-
+from core.lattice import feq_single,init_mrt_matrices
 # ── 核心模組 ──
 from core.collision import (
     f, f_new,
     rho_field, ux_field, uy_field,
     Fx_field, Fy_field,
-    init_fields, bgk_collision_kernel,apply_boundary_y_free_slip, swap_fields,
-    compute_macro
+    swap_fields,mrt_collision_kernel,init_fields  
 )
-#from core.forcing import update_forcing_kernel
-
+from core.forcing import update_forcing_kernel
 # ── 分析模組 ──
 from analysis.vorticity  import get_vorticity_numpy
 from analysis.spectrum   import compute_energy_spectrum, kolmogorov_slope
@@ -44,9 +42,10 @@ def setup_output_dirs():
 def run_simulation():
     # ── 1. 初始化 ──
     print("🪐 Jupiter LBM Simulation — initializing...")
-    init_constants()
-    init_fields()
     setup_output_dirs()
+    init_constants()
+    init_fields()  
+    init_mrt_matrices()       # 初始化 M 和 M_inv
 
     # ── 2. 資料記錄器 ──
     log = {
@@ -60,18 +59,18 @@ def run_simulation():
     velocity_history = []
     # ── 影片設定（已禁用，仅保存静态图）──
     print(f"🚀 Starting main loop  (MAX_STEPS={cfg.MAX_STEPS}) ... (video disabled)")
-    
+    omega_shear = 1.0 / cfg.TAU   # s7=s8
+    s1 = 1.1   # PDF 公式 (9)
+    s2 = 1.1
+    s4 = 1.2
+    s6 = 1.2
     for step in range(cfg.MAX_STEPS):
-        # ── A. 更新外力場（Coriolis + 熱力）──
-        #update_forcing_kernel(cfg.F0, cfg.BETA, cfg.ALPHA_T)
-
-        # ── B. BGK 碰撞 + 串流（Loop Fusion）──
-        bgk_collision_kernel(cfg.OMEGA)
-        #apply_boundary_y_free_slip() 
+        # ── A. MRT 碰撞 + Pull Streaming（Loop Fusion）──
+        mrt_collision_kernel(omega_shear, s1, s2, s4, s6)
         swap_fields()
-        compute_macro()
+        #update_forcing_kernel(cfg.F0,cfg.BETA)
 
-        # ── C. 每 SAVE_EVERY 步做記錄與保存靜態圖 ──
+        # ── B. 每 SAVE_EVERY 步做記錄與保存靜態圖 ──
         if step % cfg.SAVE_EVERY == 0:
             ux_np = ux_field.to_numpy()
             uy_np = uy_field.to_numpy()
