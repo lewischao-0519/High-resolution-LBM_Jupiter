@@ -66,10 +66,9 @@ def run_simulation():
     s6 = 1.2
     for step in range(cfg.MAX_STEPS):
         # ── A. MRT 碰撞 + Pull Streaming（Loop Fusion）──
+        update_forcing_kernel(cfg.F0,cfg.BETA)
         mrt_collision_kernel(omega_shear, s1, s2, s4, s6)
         swap_fields()
-        #update_forcing_kernel(cfg.F0,cfg.BETA)
-
         # ── B. 每 SAVE_EVERY 步做記錄與保存靜態圖 ──
         if step % cfg.SAVE_EVERY == 0:
             ux_np = ux_field.to_numpy()

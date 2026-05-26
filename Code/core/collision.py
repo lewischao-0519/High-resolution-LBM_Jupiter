@@ -1,4 +1,4 @@
-# core/collision.py  ── BGK 碰撞算子
+#core/collision.py  ── BGK 碰撞算子
 # 對應 PDF §4 數值方法（Eq.3）：fi(x+ci*dt, t+dt) = fi - (1/τ)(fi - f^eq_i) + Fi
 #
 import taichi as ti
@@ -49,10 +49,8 @@ def forcing_moments(ux: float, uy: float, Fx: float, Fy: float):
         -Fx,
         Fy,
         -Fy,
-        0,
-        0
-        #2.0 * (ux*Fx - uy*Fy),
-        #ux*Fy + uy*Fx
+        2.0 * (ux*Fx - uy*Fy),
+        ux*Fy + uy*Fx
     ])
 
 @ti.kernel

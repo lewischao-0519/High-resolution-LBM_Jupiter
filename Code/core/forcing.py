@@ -35,4 +35,4 @@ def update_forcing_kernel(f0: float, beta: float):
         fx_cor  =  f_cor * uy
         fy_cor  = -f_cor * ux
         Fx_field[y, x] = fx_cor  # 科氏力 x 分量
-        Fy_field[y, x] = -fy_cor # 科氏力 y 分量
+        Fy_field[y, x] = fy_cor # 科氏力 y 分量

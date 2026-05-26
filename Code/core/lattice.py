@@ -20,24 +20,6 @@ def feq_single(i: int, rho: float, ux: float, uy: float) -> float:
     cu  = float(cfg.CX[i]) * ux + float(cfg.CY[i]) * uy
     u2  = ux * ux + uy * uy
     return rho * cfg.W[i] * (1.0 + 3.0*cu + 4.5*cu*cu - 1.5*u2)
-    
-@ti.func
-def compute_macro(f_local: ti.template()) -> ti.Vector:
-    """
-    從局部分佈函數向量計算宏觀量 [rho, ux, uy]
-    回傳 ti.Vector([rho, ux, uy])
-    """
-    rho = 0.0
-    mx  = 0.0
-    my  = 0.0
-    for i in ti.static(range(9)):
-        rho += f_local[i]
-        mx  += f_local[i] * float(cfg.CX[i])
-        my  += f_local[i] * float(cfg.CY[i])
-    rho = ti.max(rho, 1e-6)
-    return ti.Vector([rho, mx / rho, my / rho])
-
-# core/lattice.py 末尾追加
 
 def init_mrt_matrices():
     """初始化 M 和 M_inv (在 main 中调用一次)"""
