@@ -1,29 +1,24 @@
-# core/lattice.py  ── D2Q9 晶格常數與平衡分佈計算
-# 對應 PDF §4 數值方法（Eq.3）
-#
+#外掛工具
 import taichi as ti
 import numpy as np
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import config as cfg
 
+#MRT矩陣全域化
 M = ti.field(ti.f32, shape=(9, 9))
 M_inv = ti.field(ti.f32, shape=(9, 9))
 
+#計算平衡分佈函數（於core.forcing調用）
 @ti.func
 def feq_single(i: int, rho: float, ux: float, uy: float) -> float:
-    """
-    計算單一方向 i 的平衡分佈 f^eq_i
-    f^eq = ρ * w_i * [1 + 3(c_i·u) + 4.5(c_i·u)^2 - 1.5|u|^2]
-    注意：係數 3, 4.5, 1.5 對應 cs^2=1/3 的 D2Q9 格子
-    """
     cu  = float(cfg.CX[i]) * ux + float(cfg.CY[i]) * uy
     u2  = ux * ux + uy * uy
     return rho * cfg.W[i] * (1.0 + 3.0*cu + 4.5*cu*cu - 1.5*u2)
 
+#初始化MRT矩陣（於main中調用）
 def init_mrt_matrices():
-    """初始化 M 和 M_inv (在 main 中调用一次)"""
-    # M 矩阵 (Lallemand & Luo, 2000)
+    #Ｍ矩陣
     M_np = np.array([
         [1.0,  1.0,  1.0,  1.0,  1.0,  1.0,  1.0,  1.0,  1.0],
         [-4.0, -1.0, -1.0, -1.0, -1.0,  2.0,  2.0,  2.0,  2.0],
@@ -37,9 +32,7 @@ def init_mrt_matrices():
     ], dtype=np.float32)
     M.from_numpy(M_np)
 
-    # M_inv 矩陣（由 np.linalg.inv(M) 精確計算，對應 Lallemand & Luo 2000）
-    # 原硬編碼版本的第 1、2 欄（能量矩 m1, m2）數值全部差 2 倍，
-    # 導致 M @ M_inv ≠ I（最大誤差 0.556），MRT 碰撞完全錯誤。
+    # M之反矩陣
     M_inv_np = np.array([
         [1/9,  -1/9,   1/9,    0,      0,      0,      0,     0,     0  ],
         [1/9,  -1/36, -1/18,  1/6,   -1/6,    0,      0,     1/4,   0  ],

@@ -64,11 +64,11 @@ def run_simulation():
 
     #運行迴圈
     for step in range(cfg.MAX_STEPS):
-        #純 LBM（streaming + MRT）
+        #純LBM（streaming + MRT）
         mrt_collision_kernel(omega_shear, s1, s2, s4, s6)
         swap_fields()
 
-        #CN 柯氏力 + 阻尼 + 非破壞性 f 更新
+        #柯氏力 + 阻尼 + 非破壞性field更新
         apply_coriolis_drag_update_f(cfg.F0, cfg.BETA, cfg.EPSILON)
 
         #能量注入
