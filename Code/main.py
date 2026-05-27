@@ -1,3 +1,4 @@
+#外掛工具
 import os, sys
 import numpy as np
 import matplotlib
@@ -5,27 +6,33 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
-# ── 設定 Python path ──
+#儲存路徑
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
 
+#核心模組
 import config as cfg
 from config import init_constants
 from core.lattice import feq_single,init_mrt_matrices
-# ── 核心模組 ──
 from core.collision import (
     f, f_new,
     rho_field, ux_field, uy_field,
     Fx_field, Fy_field,
-    swap_fields,mrt_collision_kernel,init_fields  
+    swap_fields,mrt_collision_kernel,init_fields,
+    recalc_equilibrium  
 )
-from core.forcing import update_forcing_kernel
-# ── 分析模組 ──
+from core.forcing import (
+    apply_coriolis_drag_update_f,
+    update_zonal_noise,
+    apply_zonal_ar1_forcing,
+    init_noise_fields
+)
+#分析模組
 from analysis.vorticity  import get_vorticity_numpy
 from analysis.spectrum   import compute_energy_spectrum, kolmogorov_slope
 from analysis.zonal_mean import compute_zonal_mean, count_jet_streams
 
-# ── 視覺化工具 ──
+#視覺化工具
 from utils.plotting import (
     plot_velocity_magnitude,
     plot_vorticity,
@@ -33,85 +40,74 @@ from utils.plotting import (
     plot_energy_spectrum
 )
 
+#創建資料夾
 def setup_output_dirs():
-    """建立輸出資料夾"""
     for d in [cfg.OUTPUT_DIR, cfg.DATA_DIR, "output/frames"]:
         os.makedirs(d, exist_ok=True)
-
-
-def run_simulation():
-    # ── 1. 初始化 ──
     print("🪐 Jupiter LBM Simulation — initializing...")
-    setup_output_dirs()
-    init_constants()
-    init_fields()  
-    init_mrt_matrices()       # 初始化 M 和 M_inv
 
-    # ── 2. 資料記錄器 ──
-    log = {
-        'step'        : [],
-        'u_rms'       : [],
-        'jet_count'   : [],
-        'E_slope'     : [],
-        'T_std'       : [],
-    }
-    # 用於計算渦流通量的歷史資料（保留最近 10 幀）
-    velocity_history = []
-    # ── 影片設定（已禁用，仅保存静态图）──
-    print(f"🚀 Starting main loop  (MAX_STEPS={cfg.MAX_STEPS}) ... (video disabled)")
-    omega_shear = 1.0 / cfg.TAU   # s7=s8
-    s1 = 1.1   # PDF 公式 (9)
-    s2 = 1.1
-    s4 = 1.2
-    s6 = 1.2
+#主程式
+def run_simulation():
+    #工具初始化
+    setup_output_dirs()    
+    init_constants()
+    init_fields()
+    init_mrt_matrices()
+    init_noise_fields()
+    
+    #記錄台
+    log = {'step': [], 'u_rms': [], 'jet_count': [], 'E_slope': [], 'T_std': []}
+
+    #MRT矩陣參數
+    omega_shear = 1.0 / cfg.TAU
+    s1, s2, s4, s6 = 1.1, 1.1, 1.8, 1.8
+
+    #運行迴圈
     for step in range(cfg.MAX_STEPS):
-        # ── A. MRT 碰撞 + Pull Streaming（Loop Fusion）──
-        update_forcing_kernel(cfg.F0,cfg.BETA)
+        #純 LBM（streaming + MRT）
         mrt_collision_kernel(omega_shear, s1, s2, s4, s6)
         swap_fields()
-        # ── B. 每 SAVE_EVERY 步做記錄與保存靜態圖 ──
+
+        #CN 柯氏力 + 阻尼 + 非破壞性 f 更新
+        apply_coriolis_drag_update_f(cfg.F0, cfg.BETA, cfg.EPSILON)
+
+        #能量注入
+        if step >= WARMUP_STEPS:
+            update_zonal_noise(cfg.alpha, cfg.sigma)
+            apply_zonal_ar1_forcing()
+
+        #紀錄
         if step % cfg.SAVE_EVERY == 0:
             ux_np = ux_field.to_numpy()
             uy_np = uy_field.to_numpy()
-
-            # 基本統計
-            u_rms  = float(np.sqrt((ux_np**2 + uy_np**2).mean()))
-            zm     = compute_zonal_mean()
-            jets   = count_jet_streams(zm['u_bar'])
-
-            # 能量譜
+            u_rms = float(np.sqrt((ux_np**2 + uy_np**2).mean()))
+            zm    = compute_zonal_mean()
+            jets  = count_jet_streams(zm['u_bar'])
             k_arr, E_arr = compute_energy_spectrum(ux_np, uy_np)
-            slope        = kolmogorov_slope(k_arr, E_arr)
+            slope = kolmogorov_slope(k_arr, E_arr)
 
-            # 記錄
             log['step'].append(step)
             log['u_rms'].append(u_rms)
             log['jet_count'].append(jets)
             log['E_slope'].append(slope if not np.isnan(slope) else 0.0)
 
-            # 渦度
             omega_np = get_vorticity_numpy()
+            plot_velocity_magnitude(ux_np, uy_np, step,
+                save_path=f"output/frames/vel_{step:06d}.jpg")
+            plot_vorticity(omega_np, step,
+                save_path=f"output/frames/vort_{step:06d}.jpg")
+            print(f"Step {step:6d} | U_rms={u_rms:.5f} | Jets={jets} | "
+                  f"E_slope={slope:.2f} | AR={'ON' if step>=WARMUP_STEPS else 'OFF'}")
 
-            # 保存靜態圖
-            u_mag = np.sqrt(ux_np**2 + uy_np**2)
-            plot_velocity_magnitude(ux_np, uy_np, step, save_path=f"output/frames/vel_{step:06d}.jpg")
-            plot_vorticity(omega_np, step, save_path=f"output/frames/vort_{step:06d}.jpg")
-            if step % cfg.SAVE_EVERY == 0:
-                ux_np = ux_field.to_numpy()
-                uy_np = uy_field.to_numpy()
-                u_mag = np.sqrt(ux_np**2 + uy_np**2)
-                print(f"Step {step}: |u| min={u_mag.min():.2e}, max={u_mag.max():.2e}")
-            # 每 20000 步保存剖面和能譜圖
             if step % 20000 == 0:
-                plot_zonal_profile(zm['y'], zm['u_bar'], step, save_path=f"output/frames/zonal_{step:06d}.png")
-                plot_energy_spectrum(k_arr, E_arr, step, slope=slope, save_path=f"output/frames/spectrum_{step:06d}.png")
-                print(f"  Step {step:6d} | U_rms={u_rms:.5f} | Jets={jets} | E_slope={slope:.2f}")
+                plot_zonal_profile(zm['y'], zm['u_bar'], step,
+                    save_path=f"output/frames/zonal_{step:06d}.png")
+                plot_energy_spectrum(k_arr, E_arr, step, slope=slope,
+                    save_path=f"output/frames/spectrum_{step:06d}.png")
 
-    print("✅ Simulation done! Generating summary plots...")
     _save_summary(log)
-    print(f"📁 All outputs saved to '{cfg.OUTPUT_DIR}/'")
 
-
+#記錄總結
 def _save_summary(log: dict):
     """儲存最終時間序列摘要圖"""
     steps = log['step']
@@ -150,7 +146,6 @@ def _save_summary(log: dict):
     # 儲存數值資料
     np.save(os.path.join(cfg.DATA_DIR, "log.npy"), log)
     print(f"  → summary.png and log.npy saved.")
-
 
 if __name__ == "__main__":
     run_simulation()
