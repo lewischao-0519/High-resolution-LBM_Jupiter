@@ -19,12 +19,11 @@ from core.collision import (
     rho_field, ux_field, uy_field,
     Fx_field, Fy_field,
     swap_fields,mrt_collision_kernel,init_fields,
-    recalc_equilibrium  
 )
 from core.forcing import (
-    apply_coriolis_drag_update_f,
+    #apply_coriolis_drag_update_f,
     update_zonal_noise,
-    apply_zonal_ar1_forcing,
+    #apply_zonal_ar1_forcing,
     init_noise_fields
 )
 #分析模組
@@ -54,27 +53,19 @@ def run_simulation():
     init_fields()
     init_mrt_matrices()
     init_noise_fields()
-    
+    print("Initialize finish.")
+
     #記錄台
     log = {'step': [], 'u_rms': [], 'jet_count': [], 'E_slope': [], 'T_std': []}
 
-    #MRT矩陣參數
-    omega_shear = 1.0 / cfg.TAU
-    s1, s2, s4, s6 = 1.1, 1.1, 1.8, 1.8
-
     #運行迴圈
     for step in range(cfg.MAX_STEPS):
-        #純LBM（streaming + MRT）
-        mrt_collision_kernel(omega_shear, s1, s2, s4, s6)
+        #模擬
+        #if step >= (cfg.WARMUP_STEPS):
+        #    update_zonal_noise(cfg.alpha, cfg.sigma)          #仍先更新AR(1)噪音
+        #純LBM+外力（streaming+MRT+forcing）
+        mrt_collision_kernel(cfg.OMEGA,cfg.s1,cfg.s2,cfg.s4,cfg.s6,cfg.F0,cfg.BETA,cfg.EPSILON)   #已包含科氏力、阻尼、噪音
         swap_fields()
-
-        #柯氏力 + 阻尼 + 非破壞性field更新
-        apply_coriolis_drag_update_f(cfg.F0, cfg.BETA, cfg.EPSILON)
-
-        #能量注入
-        if step >= WARMUP_STEPS:
-            update_zonal_noise(cfg.alpha, cfg.sigma)
-            apply_zonal_ar1_forcing()
 
         #紀錄
         if step % cfg.SAVE_EVERY == 0:
@@ -97,9 +88,9 @@ def run_simulation():
             plot_vorticity(omega_np, step,
                 save_path=f"output/frames/vort_{step:06d}.jpg")
             print(f"Step {step:6d} | U_rms={u_rms:.5f} | Jets={jets} | "
-                  f"E_slope={slope:.2f} | AR={'ON' if step>=WARMUP_STEPS else 'OFF'}")
+                  f"E_slope={slope:.2f} | AR={'ON' if step>=(cfg.WARMUP_STEPS) else 'OFF'}")
 
-            if step % 20000 == 0:
+            if step % cfg.SAVE_SPECTRUM == 0:
                 plot_zonal_profile(zm['y'], zm['u_bar'], step,
                     save_path=f"output/frames/zonal_{step:06d}.png")
                 plot_energy_spectrum(k_arr, E_arr, step, slope=slope,

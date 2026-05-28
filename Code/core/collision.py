@@ -1,4 +1,5 @@
 #外掛程式
+import taichi as ti
 import numpy as np
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -9,14 +10,17 @@ from core.lattice import feq_single, M, M_inv
 f     = ti.field(ti.f32, shape=(9, cfg.NY, cfg.NX))
 f_new = ti.field(ti.f32, shape=(9, cfg.NY, cfg.NX))
 
+#外力貢獻
+Fx_field = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
+Fy_field = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
+
+#AR噪音場（1D，每個緯度行一個值，對所有 x 相同 → 只注入 k_x=0）
+noise_zonal = ti.field(ti.f32, shape=cfg.NY)
+
 #宏觀量
 rho_field = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
 ux_field  = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
 uy_field  = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
-
-#外力貢獻
-Fx_field = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
-Fy_field = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
 
 #MRT碰撞核函数（於mrt_collision_kernel中調用）
 @ti.func
@@ -54,8 +58,11 @@ def forcing_moments(ux: float, uy: float, Fx: float, Fy: float):
 #MRT碰撞模型(於main中調用）
 @ti.kernel
 def mrt_collision_kernel(
-    omega_shear: float,      
-    s1: float, s2: float, s4: float, s6: float):
+    omega_shear: float,
+    s1: float, s2: float, s4: float, s6: float,
+    f0: float, beta: float, epsilon: float
+):
+    ny_half = cfg.NY // 2
     for y, x in rho_field:
         #Pull streaming
         f_local = ti.Vector([0.0] * 9)
@@ -63,26 +70,17 @@ def mrt_collision_kernel(
             px = (x - cfg.CX[i] + cfg.NX) % cfg.NX
             py = y - cfg.CY[i]
 
-            if py < 0:   #下邊界自由滑移（鏡面反射：只翻轉 y 分量）
-                if i == 2:          
-                    f_local[i] = f[4, y, x]
-                elif i == 5:        
-                    f_local[i] = f[8, y, x]
-                elif i == 6:        
-                    f_local[i] = f[7, y, x]
-                else:
-                    f_local[i] = f[i, y, x]
-            elif py >= cfg.NY:  #上邊界自由滑移（鏡面反射：只翻轉 y 分量）
-                if i == 4:         
-                    f_local[i] = f[2, y, x]
-                elif i == 7:         
-                    f_local[i] = f[6, y, x]
-                elif i == 8:        
-                    f_local[i] = f[5, y, x]
-                else:
-                    f_local[i] = f[i, y, x]
+            if py < 0:   # 下邊界自由滑移（鏡面反射）
+                if i == 2:          f_local[i] = f[4, y, x]
+                elif i == 5:        f_local[i] = f[8, y, x]
+                elif i == 6:        f_local[i] = f[7, y, x]
+                else:               f_local[i] = f[i, y, x]
+            elif py >= cfg.NY:  # 上邊界自由滑移
+                if i == 4:          f_local[i] = f[2, y, x]
+                elif i == 7:        f_local[i] = f[6, y, x]
+                elif i == 8:        f_local[i] = f[5, y, x]
+                else:               f_local[i] = f[i, y, x]
             else:
-                #正常情況
                 f_local[i] = f[i, py, px]
 
         #計算宏觀參數
@@ -97,59 +95,81 @@ def mrt_collision_kernel(
         vx /= rho
         vy /= rho
 
-        #讀取外力（forcing）
-        Fx = Fx_field[y, x]
-        Fy = Fy_field[y, x]
+        #半隱式科氏力旋轉
+        dy    = float(y - ny_half)
+        f_cor = f0 + beta * dy
+        a     = f_cor * 0.5          # a = f*dt/2, dt=1
+        det   = 1.0 + a * a
+        
+        #旋轉後的速度（解析精確，無穩定性問題）
+        vx_rot = ((1.0 - a*a) * vx + 2.0 * a * vy) / det
+        vy_rot = ((1.0 - a*a) * vy - 2.0 * a * vx) / det
 
-        # ========== 4. MRT 碰撞 ==========
-        #計算矩陣（m = M * f_local） 
+         # 用 δf_eq 將旋轉注入 f_local（這是原本穩定的作法）
+        for i in ti.static(range(9)):
+            delta_feq = feq_single(i, rho, vx_rot, vy_rot) \
+                      - feq_single(i, rho, vx, vy)
+            f_local[i] += delta_feq
+            
+        #計算外力（阻尼 + 噪音）
+        # 阻尼基於旋轉後的速度
+        Fx_damp = -epsilon * vx
+        Fy_damp = -epsilon * vy
+
+        #噪音（限幅）
+        noise_val = noise_zonal[y]
+        noise_max = 0.05
+        Fx_noise = 0.5 * noise_val
+        Fy_noise = 0.0
+
+        Fx = Fx_damp + Fx_noise
+        Fy = Fy_damp + Fy_noise
+
+        #MRT碰撞（使用 Guo 格式）
+        #Guo 格式
+        vx_half = vx + 0.5 * Fx / rho
+        vy_half = vy + 0.5 * Fy / rho
+
+        #計算 m = M * f_local
         m = ti.Vector.zero(ti.f32, 9)
-        for i in ti.static(range(9)):       # i 是矩索引 (0..8)
+        for i in ti.static(range(9)):
             total = 0.0
-            for j in ti.static(range(9)):   # j 是分布函数索引 (0..8)
+            for j in ti.static(range(9)):
                 total += M[i, j] * f_local[j]
             m[i] = total
 
-        #meq
-        meq_vec = meq(rho, vx, vy)
+        # 用 v_half 計算平衡態和力矩
+        meq_vec = meq(rho, vx_half, vy_half)
+        Fm_vec  = forcing_moments(vx_half, vy_half, Fx, Fy)
 
-        #Fm
-        Fm_vec = forcing_moments(vx, vy, Fx, Fy)
-
-        #矩陣鬆弛
         S = ti.Vector([
-            1.0, s1, s2,        # m0, m1, m2
-            1.0, s4,            # m3, m4
-            1.0, s6,            # m5, m6
-            omega_shear, omega_shear  # m7, m8
+            1.0, s1, s2,
+            1.0, s4,
+            1.0, s6,
+            omega_shear, omega_shear
         ])
 
-        #矩陣鬆弛
         m_star = ti.Vector.zero(ti.f32, 9)
         for i in ti.static(range(9)):
             m_star[i] = m[i] - S[i]*(m[i] - meq_vec[i]) + (1.0 - 0.5*S[i]) * Fm_vec[i]
 
-        #反矩陣
+        # 反變換
         for i in ti.static(range(9)):
             val = 0.0
             for j in ti.static(range(9)):
                 val += M_inv[i, j] * m_star[j]
-            f_new[i, y, x] = ti.max(val, 1e-12)
-        
-        #儲存宏觀參數
+            f_new[i, y, x] = val   
+
+        # Guo 格式：v_half 再補半次 = v + F/rho（完整外力效應）
         rho_field[y, x] = rho
-        # Guo 格式修正速度：u = (j/rho) + F/(2rho)
-        ux_field[y, x] = vx + 0.5 * Fx / rho
-        uy_field[y, x] = vy + 0.5 * Fy / rho
+        ux_field[y, x] = vx + Fx / rho      # vx + 0.5*Fx/rho + 0.5*Fx/rho
+        uy_field[y, x] = vy + Fy / rho      # vy + 0.5*Fy/rho + 0.5*Fy/rho
 
 #裁減負值（安全措施）（於main中調用）
 @ti.kernel
 def swap_fields():
     for i, y, x in f:
         f[i, y, x], f_new[i, y, x] = f_new[i, y, x], f[i, y, x]
-    for i, y, x in ti.ndrange(9, cfg.NY, cfg.NX):
-        f[i, y, x] = ti.max(f[i, y, x], 1e-8)
-        f_new[i, y, x] = ti.max(f_new[i, y, x], 1e-8)
 
 #初始化平衡分佈（於main中調用）
 @ti.kernel
@@ -173,13 +193,16 @@ def init_fields_kernel(U0: float):
         Fx_field[y, x] = 0.0
         Fy_field[y, x] = 0.0
 
+@ti.kernel
+def clamp_fields_kernel():
+    for i, y, x in ti.ndrange(9, cfg.NY, cfg.NX):
+        f[i, y, x] = ti.max(f[i, y, x], 1e-8)
+        f_new[i, y, x] = ti.max(f_new[i, y, x], 1e-8)
+
 #field初始化（於main中調用）
 def init_fields():
-    """初始化入口：设置宏观涡旋 + 裁剪"""
     U0 = cfg.U_MAX * 0.5
     init_fields_kernel(U0)
-    # add_noise_kernel(U0 * 0.01)   # 可选噪声
     clamp_fields_kernel()
-    # 确保外力场清零（虽然 kernel 里已经做了，但再显式一下）
     Fx_field.fill(0.0)
     Fy_field.fill(0.0)

@@ -4,11 +4,8 @@ import numpy as np
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import config as cfg
-from core.collision import Fx_field, Fy_field, ux_field, uy_field, rho_field, f
+from core.collision import Fx_field, Fy_field, ux_field, uy_field, rho_field, f,noise_zonal
 from core.lattice import feq_single
-
-#AR噪音場（1D，每個緯度行一個值，對所有 x 相同 → 只注入 k_x=0）
-noise_zonal = ti.field(ti.f32, shape=cfg.NY)
 
 #AR噪音場初始化（於main中調用）
 def init_noise_fields():
@@ -62,14 +59,17 @@ def apply_zonal_ar1_forcing():
 
         #速度修正（只注入緯向分量）
         ux_new = ux_old + 0.5 * noise_zonal[y] / rho
+        uy_new = uy_old
 
         #安全限幅（避免超過 LBM 穩定極限 |u| < 0.3）
         u2 = ux_new * ux_new + uy_old * uy_old
         if u2 > 0.09:
             scale  = 0.3 / ti.sqrt(u2)
             ux_new = ux_new * scale
+            uy_new = uy_new * scale
 
         ux_field[y, x] = ux_new
+        uy_field[y, x] = uy_new  
 
         #非破壞性field更新
         for i in ti.static(range(9)):
