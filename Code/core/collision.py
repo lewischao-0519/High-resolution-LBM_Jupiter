@@ -127,8 +127,8 @@ def mrt_collision_kernel(
 
         #MRT碰撞（使用 Guo 格式）
         #Guo 格式
-        vx_half = vx + 0.5 * Fx / rho
-        vy_half = vy + 0.5 * Fy / rho
+        vx_half = vx_rot + 0.5 * Fx / rho
+        vy_half = vy_rot + 0.5 * Fy / rho
 
         #計算 m = M * f_local
         m = ti.Vector.zero(ti.f32, 9)
