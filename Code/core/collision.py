@@ -64,26 +64,26 @@ def mrt_collision_kernel(
 ):
     ny_half = cfg.NY // 2
     for y, x in rho_field:
-        #Pull streaming
+        # ---------- 1. Pull streaming ----------
         f_local = ti.Vector([0.0] * 9)
         for i in ti.static(range(9)):
             px = (x - cfg.CX[i] + cfg.NX) % cfg.NX
             py = y - cfg.CY[i]
 
-            if py < 0:   # 下邊界自由滑移（鏡面反射）
-                if i == 2:          f_local[i] = f[4, y, x]
-                elif i == 5:        f_local[i] = f[8, y, x]
-                elif i == 6:        f_local[i] = f[7, y, x]
+            if py < 0:
+                if i == 2:          f_local[i] = f[4, y, px]
+                elif i == 5:        f_local[i] = f[8, y, px]
+                elif i == 6:        f_local[i] = f[7, y, px]
                 else:               f_local[i] = f[i, y, x]
-            elif py >= cfg.NY:  # 上邊界自由滑移
-                if i == 4:          f_local[i] = f[2, y, x]
-                elif i == 7:        f_local[i] = f[6, y, x]
-                elif i == 8:        f_local[i] = f[5, y, x]
+            elif py >= cfg.NY:
+                if i == 4:          f_local[i] = f[2, y, px]
+                elif i == 7:        f_local[i] = f[6, y, px]
+                elif i == 8:        f_local[i] = f[5, y, px]
                 else:               f_local[i] = f[i, y, x]
             else:
                 f_local[i] = f[i, py, px]
 
-        #計算宏觀參數
+        # ---------- 2. 計算原始巨觀量 ----------
         rho = 0.0
         vx = 0.0
         vy = 0.0
@@ -95,42 +95,40 @@ def mrt_collision_kernel(
         vx /= rho
         vy /= rho
 
-        #半隱式科氏力旋轉
+        # ---------- 3. 半隱式科氏力旋轉（計算目標速度）----------
         dy    = float(y - ny_half)
         f_cor = f0 + beta * dy
-        a     = f_cor * 0.5          # a = f*dt/2, dt=1
+        a     = f_cor * 0.5
         det   = 1.0 + a * a
-        
-        #旋轉後的速度（解析精確，無穩定性問題）
+
         vx_rot = ((1.0 - a*a) * vx + 2.0 * a * vy) / det
         vy_rot = ((1.0 - a*a) * vy - 2.0 * a * vx) / det
 
-         # 用 δf_eq 將旋轉注入 f_local（這是原本穩定的作法）
-        for i in ti.static(range(9)):
-            delta_feq = feq_single(i, rho, vx_rot, vy_rot) \
-                      - feq_single(i, rho, vx, vy)
-            f_local[i] += delta_feq
-            
-        #計算外力（阻尼 + 噪音）
-        # 阻尼基於旋轉後的速度
-        Fx_damp = -epsilon * vx
-        Fy_damp = -epsilon * vy
+        # ---------- 4. 計算等效外力 ----------
+        # 科氏力的等效外力（加速度 * 密度）
+        Fx_cor = rho * (vx_rot - vx)
+        Fy_cor = rho * (vy_rot - vy)
 
-        #噪音（限幅）
+        # 阻尼（基於旋轉後的速度，以保持物理一致性）
+        Fx_damp = -epsilon * vx_rot
+        Fy_damp = -epsilon * vy_rot
+
+        # 噪音（可選擇是否基於旋轉後速度，影響不大）
         noise_val = noise_zonal[y]
         noise_max = 0.05
+        if ti.abs(noise_val) > noise_max:
+            noise_val = noise_max * ti.math.sign(noise_val)
         Fx_noise = 0.5 * noise_val
         Fy_noise = 0.0
 
-        Fx = Fx_damp + Fx_noise
-        Fy = Fy_damp + Fy_noise
+        Fx = Fx_cor + Fx_damp + Fx_noise
+        Fy = Fy_cor + Fy_damp + Fy_noise
 
-        #MRT碰撞（使用 Guo 格式）
-        #Guo 格式
-        vx_half = vx_rot + 0.5 * Fx / rho
-        vy_half = vy_rot + 0.5 * Fy / rho
+        # ---------- 5. Guo 格式：半時間步速度 ----------
+        vx_half = vx + 0.5 * Fx / rho
+        vy_half = vy + 0.5 * Fy / rho
 
-        #計算 m = M * f_local
+        # ---------- 6. MRT 碰撞 ----------
         m = ti.Vector.zero(ti.f32, 9)
         for i in ti.static(range(9)):
             total = 0.0
@@ -138,7 +136,6 @@ def mrt_collision_kernel(
                 total += M[i, j] * f_local[j]
             m[i] = total
 
-        # 用 v_half 計算平衡態和力矩
         meq_vec = meq(rho, vx_half, vy_half)
         Fm_vec  = forcing_moments(vx_half, vy_half, Fx, Fy)
 
@@ -153,17 +150,22 @@ def mrt_collision_kernel(
         for i in ti.static(range(9)):
             m_star[i] = m[i] - S[i]*(m[i] - meq_vec[i]) + (1.0 - 0.5*S[i]) * Fm_vec[i]
 
-        # 反變換
+        # 反變換，寫入 f_new
         for i in ti.static(range(9)):
             val = 0.0
             for j in ti.static(range(9)):
                 val += M_inv[i, j] * m_star[j]
-            f_new[i, y, x] = val   
+            f_new[i, y, x] = val
 
-        # Guo 格式：v_half 再補半次 = v + F/rho（完整外力效應）
+        # 邊界強制無穿透（南北牆）
+        if y == 0 or y == cfg.NY - 1:
+            uy_final = 0.0
+            Fy = 0.0          # 同時把垂直外力歸零，避免下一個時間步的累積
+        # 若想更乾淨，甚至可以讓 Fx 也保持原樣（牆面可受切向力）
+        # ---------- 7. 最終速度 ----------
         rho_field[y, x] = rho
-        ux_field[y, x] = vx + Fx / rho      # vx + 0.5*Fx/rho + 0.5*Fx/rho
-        uy_field[y, x] = vy + Fy / rho      # vy + 0.5*Fy/rho + 0.5*Fy/rho
+        ux_field[y, x] = vx_half
+        uy_field[y, x] = vy_half
 
 #裁減負值（安全措施）（於main中調用）
 @ti.kernel
@@ -179,8 +181,12 @@ def init_fields_kernel(U0: float):
     for y, x in ti.ndrange(cfg.NY, cfg.NX):
         fx = ti.cast(x, ti.f32)
         fy = ti.cast(y, ti.f32)
-        ux_macro = U0 * ti.sin(2.0 * kx * fx) * ti.cos(2.0 * ky * fy)
-        uy_macro = -U0 * ti.cos(2.0 * kx * fx) * ti.sin(2.0 * ky * fy)
+        
+        # 加入 5% 的隨機白噪音擾動以打破對稱性
+        noise_x = 0.05 * U0 * (ti.random(ti.f32) - 0.5)
+        noise_y = 0.05 * U0 * (ti.random(ti.f32) - 0.5)
+        ux_macro = U0 * ti.sin(2.0 * kx * fx) * ti.cos(2.0 * ky * fy) + noise_x
+        uy_macro = -U0 * ti.cos(2.0 * kx * fx) * ti.sin(2.0 * ky * fy) + noise_y
         rho = 1.0
 
         #初始化分佈函數為平衡態

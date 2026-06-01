@@ -61,8 +61,8 @@ def run_simulation():
     #運行迴圈
     for step in range(cfg.MAX_STEPS):
         #模擬
-        #if step >= (cfg.WARMUP_STEPS):
-        #    update_zonal_noise(cfg.alpha, cfg.sigma)          #仍先更新AR(1)噪音
+        if step >= (cfg.WARMUP_STEPS) and step % 100 == 0:
+            update_zonal_noise(cfg.alpha, cfg.sigma)          #仍先更新AR(1)噪音
         #純LBM+外力（streaming+MRT+forcing）
         mrt_collision_kernel(cfg.OMEGA,cfg.s1,cfg.s2,cfg.s4,cfg.s6,cfg.F0,cfg.BETA,cfg.EPSILON)   #已包含科氏力、阻尼、噪音
         swap_fields()

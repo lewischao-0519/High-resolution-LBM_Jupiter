@@ -8,9 +8,9 @@ ti.init(arch=ti.gpu, default_fp=ti.f32)
 #網格基本參數
 NX        = 512          # x 方向格點數（緯向）
 NY        = 256          # y 方向格點數（徑向 / 緯度方向）
-MAX_STEPS = 100000        # 總演化步數
+MAX_STEPS = 300000        # 總演化步數
 SAVE_EVERY = 5000         # 每幾步存一幀
-SAVE_SPECTRUM = 2*SAVE_EVERY    # 每幾步存數據
+SAVE_SPECTRUM = 4*SAVE_EVERY    # 每幾步存數據
 
 #D2Q9離散速度
 CX_NP  = np.array([ 0, 1, 0,-1, 0, 1,-1,-1, 1], dtype=np.int32)
@@ -36,24 +36,24 @@ def init_constants():
 
 #物理參數
 #β-plane模型科氏力參數
-F0 = 1e-3                #科氏力參數基準值（根據模擬緯度調整）
-BETA = 2e-3              #科氏力梯度
+F0 = 1e-4                #科氏力參數基準值（根據模擬緯度調整）
+BETA = 2e-4              #科氏力梯度
 
 #Reighly drag
-EPSILON = 1e-5          #摩擦係數
+EPSILON = 5e-6           #摩擦係數
 
 # AR參數
 Tc = 10.0                     #時間尺度
 alpha = np.exp(-1.0 / Tc)     #自相關係數
-sigma = 1e-3                   #振幅
-WARMUP_STEPS = 40000 
+sigma = 1e-6                   #振幅
+WARMUP_STEPS = 100000 
 
 #MRT矩陣參數
 s1, s2, s4, s6 = 1.1, 1.1, 1.8, 1.8
 
 #LBM流體參數
-U_MAX   = 0.1                  # 特徵速度
-NU      = 0.001                # 運動黏滯係數
+U_MAX   = 0.05                  # 特徵速度
+NU      = 0.01                # 運動黏滯係數
 TAU     = 3.0 * NU + 0.5       # 鬆弛時間（現已被MRT取代，但保留以供參考）
 OMEGA   = float(1.0 / TAU)     # 單純BGK鬆弛頻率（現已被MRT取代)
 
