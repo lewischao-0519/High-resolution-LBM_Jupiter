@@ -36,24 +36,23 @@ def init_constants():
 
 #物理參數
 #β-plane模型科氏力參數
-F0 = 1e-4                #科氏力參數基準值（根據模擬緯度調整）
-BETA = 5e-5              #科氏力梯度
-
+F0 = 2e-4                #科氏力參數基準值（根據模擬緯度調整）
+BETA = 8e-5              #科氏力梯度
 #Reighly drag
-EPSILON = 1e-5           #摩擦係數
+EPSILON = 6e-6           #摩擦係數
 
 # AR參數
-Tc = 1000.0                   #時間尺度
+Tc = 500.0                    #時間尺度
 alpha = np.exp(-1.0 / Tc)     #自相關係數
-sigma = 1e-7                  #振幅
+sigma = 8e-7                  #振幅
 WARMUP_STEPS = 100000 
 
 #MRT矩陣參數
 s1, s2, s4, s6 = 1.2, 1.2, 1.8, 1.8
 
 #LBM流體參數
-U_MAX   = 0.1                 # 特徵速度
-NU      = 0.0001                # 運動黏滯係數
+U_MAX   = 0.07                  # 特徵速度
+NU      = 0.0001               # 運動黏滯係數
 TAU     = 3.0 * NU + 0.5       # 鬆弛時間（現已被MRT取代，但保留以供參考）
 OMEGA   = float(1.0 / TAU)     # 單純BGK鬆弛頻率（現已被MRT取代）
 
