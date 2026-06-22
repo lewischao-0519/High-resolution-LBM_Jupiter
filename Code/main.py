@@ -95,9 +95,39 @@ def run_simulation():
                     save_path=f"output/frames/zonal_{step:06d}.png")
                 plot_energy_spectrum(k_arr, E_arr, step, slope=slope,
                     save_path=f"output/frames/spectrum_{step:06d}.png")
+    
+    if step == cfg.MAX_STEPS:
+        #紀錄
+        if step % cfg.SAVE_EVERY == 0:
+            ux_np = ux_field.to_numpy()
+            uy_np = uy_field.to_numpy()
+            u_rms = float(np.sqrt((ux_np**2 + uy_np**2).mean()))
+            zm    = compute_zonal_mean()
+            jets  = count_jet_streams(zm['u_bar'])
+            k_arr, E_arr = compute_energy_spectrum(ux_np, uy_np)
+            slope = kolmogorov_slope(k_arr, E_arr)
+
+            log['step'].append(step)
+            log['u_rms'].append(u_rms)
+            log['jet_count'].append(jets)
+            log['E_slope'].append(slope if not np.isnan(slope) else 0.0)
+
+            omega_np = get_vorticity_numpy()
+            plot_velocity_magnitude(ux_np, uy_np, step,
+                save_path=f"output/frames/vel_{step:06d}.jpg")
+            plot_vorticity(omega_np, step,
+                save_path=f"output/frames/vort_{step:06d}.jpg")
+            print(f"Step {step:6d} | U_rms={u_rms:.5f} | Jets={jets} | "
+                  f"E_slope={slope:.2f} | AR={'ON' if step>=(cfg.WARMUP_STEPS) else 'OFF'}")
+
+            if step % cfg.SAVE_SPECTRUM == 0:
+                plot_zonal_profile(zm['y'], zm['u_bar'], step,
+                    save_path=f"output/frames/zonal_{step:06d}.png")
+                plot_energy_spectrum(k_arr, E_arr, step, slope=slope,
+                    save_path=f"output/frames/spectrum_{step:06d}.png")
 
     _save_summary(log)
-
+        
 #記錄總結
 def _save_summary(log: dict):
     """儲存最終時間序列摘要圖"""
