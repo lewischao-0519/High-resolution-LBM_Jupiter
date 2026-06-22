@@ -45,15 +45,15 @@ EPSILON = 1e-5           #摩擦係數
 # AR參數
 Tc = 1000.0                   #時間尺度
 alpha = np.exp(-1.0 / Tc)     #自相關係數
-sigma = 1e-10                  #振幅
+sigma = 1e-7                  #振幅
 WARMUP_STEPS = 100000 
 
 #MRT矩陣參數
 s1, s2, s4, s6 = 1.2, 1.2, 1.8, 1.8
 
 #LBM流體參數
-U_MAX   = 0.05                 # 特徵速度
-NU      = 0.002                # 運動黏滯係數
+U_MAX   = 0.1                 # 特徵速度
+NU      = 0.0001                # 運動黏滯係數
 TAU     = 3.0 * NU + 0.5       # 鬆弛時間（現已被MRT取代，但保留以供參考）
 OMEGA   = float(1.0 / TAU)     # 單純BGK鬆弛頻率（現已被MRT取代）
 
