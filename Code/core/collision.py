@@ -118,7 +118,7 @@ def mrt_collision_kernel(
             m[i] = s
         meq_vec = meq(rho, vx_half, vy_half)
         Fm_vec  = forcing_moments(vx_half, vy_half, Fx, Fy)
-        S = ti.Vector([1.0, s1, s2, 1.0, s4, 1.0, s6, omega_shear, omega_shear])
+        S = ti.Vector([1.0, s1, s2, 1.0, s4, s4, s6, omega_shear, omega_shear])
         m_star = ti.Vector.zero(ti.f32, 9)
         for i in ti.static(range(9)):
             m_star[i] = m[i] - S[i]*(m[i]-meq_vec[i]) + (1.0-0.5*S[i])*Fm_vec[i]

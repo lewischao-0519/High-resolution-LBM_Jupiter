@@ -39,7 +39,7 @@ def init_constants():
 F0 = 2e-4                #科氏力參數基準值（根據模擬緯度調整）
 BETA = 8e-5              #科氏力梯度
 #Reighly drag
-EPSILON = 6e-6           #摩擦係數
+EPSILON = 3e-5           #摩擦係數
 
 # AR參數
 Tc = 500.0                    #時間尺度
