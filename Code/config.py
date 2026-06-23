@@ -8,7 +8,7 @@ ti.init(arch=ti.gpu, default_fp=ti.f32)
 #網格基本參數
 NX        = 512          # x 方向格點數（緯向）
 NY        = 256          # y 方向格點數（徑向 / 緯度方向）
-MAX_STEPS = 300000        # 總演化步數
+MAX_STEPS = 500000        # 總演化步數
 SAVE_EVERY = 5000         # 每幾步存一幀
 SAVE_SPECTRUM = 4*SAVE_EVERY    # 每幾步存數據
 
@@ -38,13 +38,14 @@ def init_constants():
 #β-plane模型科氏力參數
 F0 = 2e-4                #科氏力參數基準值（根據模擬緯度調整）
 BETA = 8e-5              #科氏力梯度
+
 #Reighly drag
 EPSILON = 3e-5           #摩擦係數
 
 # AR參數
-Tc = 500.0                    #時間尺度
+Tc = 400.0                    #時間尺度
 alpha = np.exp(-1.0 / Tc)     #自相關係數
-sigma = 8e-7                  #振幅
+sigma = 1e-6                  #振幅
 WARMUP_STEPS = 100000 
 
 #MRT矩陣參數
