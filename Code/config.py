@@ -42,10 +42,14 @@ BETA = 8e-5              #科氏力梯度
 #Reighly drag
 EPSILON = 3e-5           #摩擦係數
 
+#海綿層參數
+SPONGE_FRAC = 0.2        #海綿層厚度占總高度的比例
+EPSILON_MAX = 7e-5       #海綿層最大阻尼（外側）
+
 # AR參數
 Tc = 400.0                    #時間尺度
 alpha = np.exp(-1.0 / Tc)     #自相關係數
-sigma = 1e-6                  #振幅
+sigma = 1.5e-6                  #振幅
 WARMUP_STEPS = 100000 
 
 #MRT矩陣參數
