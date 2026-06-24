@@ -87,13 +87,28 @@ def mrt_collision_kernel(
             vy  += f_local[i]*float(cfg.CY[i])
         rho = ti.max(rho, 1e-6); vx /= rho; vy /= rho
 
+        # ---------- 海綿層：計算局部 epsilon ----------
+        sponge_depth = ti.cast(cfg.NY * cfg.SPONGE_FRAC, ti.f32)
+
+        # 南側（y 從 0 往內）
+        south_dist = ti.cast(y, ti.f32) / sponge_depth          # 0(牆)→1(內緣)
+        # 北側（y 從 NY-1 往內）
+        north_dist = ti.cast(cfg.NY - 1 - y, ti.f32) / sponge_depth
+
+        # 取兩側中較小的（邊界處=0，內側=1），clamp 到 [0,1]
+        r = ti.min(ti.min(south_dist, north_dist), 1.0)
+
+        # 平滑遞增函數（cos²，r=0時最大阻尼，r=1時回到背景阻尼）
+        blend = r * r * (3.0 - 2.0 * r)   # smoothstep，比 cos 便宜
+        eps_local = epsilon + (cfg.EPSILON_MAX - epsilon) * (1.0 - blend)
+        
         # 3. 外力：科氏力(cross product) + 阻尼 + 噪音，皆為 rho*加速度
         dy    = float(y - ny_half)
         f_cor = f0 + beta*dy
         Fx_cor =  rho * f_cor * vy
         Fy_cor = -rho * f_cor * vx
-        Fx_damp = -epsilon * rho * vx
-        Fy_damp = -epsilon * rho * vy
+        Fx_damp = -eps_local * rho * vx
+        Fy_damp = -eps_local * rho * vy
 
         noise_val = noise_zonal[y]
         noise_max = 0.005
