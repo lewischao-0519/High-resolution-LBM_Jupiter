@@ -6,8 +6,8 @@ import taichi as ti
 ti.init(arch=ti.gpu, default_fp=ti.f32)
 
 #網格基本參數
-NX        = 512          # x 方向格點數（緯向）
-NY        = 256          # y 方向格點數（徑向 / 緯度方向）
+NX        = 512           # x 方向格點數（緯向）
+NY        = 256           # y 方向格點數（徑向 / 緯度方向）
 MAX_STEPS = 500000        # 總演化步數
 SAVE_EVERY = 5000         # 每幾步存一幀
 SAVE_SPECTRUM = 4*SAVE_EVERY    # 每幾步存數據
@@ -52,7 +52,7 @@ WARMUP_STEPS = 100000
 s1, s2, s4, s6 = 1.2, 1.2, 1.8, 1.8
 
 #LBM流體參數
-U_MAX   = 0.07                  # 特徵速度
+U_MAX   = 0.07                 # 特徵速度
 NU      = 0.0001               # 運動黏滯係數
 TAU     = 3.0 * NU + 0.5       # 鬆弛時間（現已被MRT取代，但保留以供參考）
 OMEGA   = float(1.0 / TAU)     # 單純BGK鬆弛頻率（現已被MRT取代）
