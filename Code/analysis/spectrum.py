@@ -80,7 +80,7 @@ def compute_zonal_mean_spectrum(ux_np: np.ndarray = None
 
 
 def kolmogorov_slope(k: np.ndarray, E: np.ndarray,
-                     k_lo: float = 1.0, k_hi: float = 8.0) -> float:
+                     k_lo: float = 0.05, k_hi: float = 0.5) -> float:
     """
     在對數空間擬合 E(k) ~ k^α，回傳斜率 α。
     Kolmogorov: α = -5/3（3D湍流）

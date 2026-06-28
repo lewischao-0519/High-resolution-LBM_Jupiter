@@ -114,8 +114,10 @@ def mrt_collision_kernel(
         noise_max = 0.005
         if ti.abs(noise_val) > noise_max:
             noise_val = noise_max * ti.math.sign(noise_val)
-        Fx = Fx_cor + Fx_damp + 0.5*noise_val
-        Fy = Fy_cor + Fy_damp
+        
+        # 加上微小的 2D 隨機噪音以在模擬過程中持續破壞對稱性 (增強至 5e-6)
+        Fx = Fx_cor + Fx_damp + 0.5*noise_val + 5e-6 * ti.randn(ti.f32)
+        Fy = Fy_cor + Fy_damp + 5e-6 * ti.randn(ti.f32)
 
         # 牆面無穿透：垂直外力歸零（在施力前）
         if y == 0 or y == cfg.NY-1:
@@ -161,8 +163,8 @@ def init_fields_kernel(U0: float):
         fx = ti.cast(x, ti.f32)
         fy = ti.cast(y, ti.f32)
         
-        ux_macro = U0 * ti.sin(2.0 * kx * fx) * ti.cos(2.0 * ky * fy) 
-        uy_macro = -U0 * ti.cos(2.0 * kx * fx) * ti.sin(2.0 * ky * fy) 
+        ux_macro = U0 * ti.sin(2.0 * kx * fx) * ti.cos(2.0 * ky * fy) + 0.01 * ti.randn(ti.f32)
+        uy_macro = -U0 * ti.cos(2.0 * kx * fx) * ti.sin(2.0 * ky * fy) + 0.01 * ti.randn(ti.f32) 
         rho = 1.0
 
         #初始化分佈函數為平衡態

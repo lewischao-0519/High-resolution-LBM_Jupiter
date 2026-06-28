@@ -56,7 +56,7 @@ def run_simulation():
     print("Initialize finish.")
 
     #記錄台
-    log = {'step': [], 'u_rms': [], 'jet_count': [], 'E_slope': [], 'T_std': []}
+    log = {'step': [], 'u_rms': [], 'u_max': [], 'jet_count': [], 'E_slope': [], 'T_std': []}
 
     #運行迴圈
     for step in range(cfg.MAX_STEPS+1):
@@ -71,7 +71,9 @@ def run_simulation():
         if step % cfg.SAVE_EVERY == 0:
             ux_np = ux_field.to_numpy()
             uy_np = uy_field.to_numpy()
-            u_rms = float(np.sqrt((ux_np**2 + uy_np**2).mean()))
+            u_mag = np.sqrt(ux_np**2 + uy_np**2)
+            u_rms = float(u_mag.mean())
+            u_max = float(u_mag.max())
             zm    = compute_zonal_mean()
             jets  = count_jet_streams(zm['u_bar'])
             k_arr, E_arr = compute_energy_spectrum(ux_np, uy_np)
@@ -79,15 +81,19 @@ def run_simulation():
 
             log['step'].append(step)
             log['u_rms'].append(u_rms)
+            log['u_max'].append(u_max)
             log['jet_count'].append(jets)
             log['E_slope'].append(slope if not np.isnan(slope) else 0.0)
+
+            if u_max > 0.3:
+                print(f"⚠️ WARNING: Maximum velocity u_max = {u_max:.5f} exceeds the stability limit 0.3!")
 
             omega_np = get_vorticity_numpy()
             plot_velocity_magnitude(ux_np, uy_np, step,
                 save_path=f"output/frames/vel_{step:06d}.jpg")
             plot_vorticity(omega_np, step,
                 save_path=f"output/frames/vort_{step:06d}.jpg")
-            print(f"Step {step:6d} | U_rms={u_rms:.5f} | Jets={jets} | "
+            print(f"Step {step:6d} | U_rms={u_rms:.5f} | U_max={u_max:.5f} | Jets={jets} | "
                   f"E_slope={slope:.2f} | AR={'ON' if step>=(cfg.WARMUP_STEPS) else 'OFF'}")
 
             if step % cfg.SAVE_SPECTRUM == 0:
