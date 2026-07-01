@@ -20,17 +20,38 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRAMES_DIR = os.path.join(ROOT, "output", "frames")
 OUT_DIR    = os.path.join(ROOT, "output")
 
+# ffmpeg 執行檔路徑（check_ffmpeg 解析後填入，make_video 沿用）
+FFMPEG = "ffmpeg"
+
+
+def _find_ffmpeg():
+    """回傳可用的 ffmpeg 執行檔路徑；找不到回傳 None。
+    優先用系統 PATH 上的 ffmpeg，否則退回 imageio-ffmpeg 內建的執行檔
+    （pip install imageio-ffmpeg 即可，Windows 免手動配 PATH）。"""
+    for exe in ("ffmpeg",):
+        try:
+            r = subprocess.run([exe, "-version"], capture_output=True, text=True)
+            if r.returncode == 0:
+                return exe
+        except FileNotFoundError:
+            pass
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
 
 def check_ffmpeg():
-    try:
-        result = subprocess.run(["ffmpeg", "-version"],
-                                capture_output=True, text=True)
-    except FileNotFoundError:
-        result = None
-    if result is None or result.returncode != 0:
-        print("❌ 找不到 ffmpeg。macOS: brew install ffmpeg；"
+    global FFMPEG
+    exe = _find_ffmpeg()
+    if exe is None:
+        print("❌ 找不到 ffmpeg。最簡單：pip install imageio-ffmpeg（免配 PATH）。\n"
+              "   或 macOS: brew install ffmpeg；"
               "Windows: https://ffmpeg.org/download.html 下載後將 bin 加入 PATH。")
         sys.exit(1)
+    FFMPEG = exe
+    result = subprocess.run([exe, "-version"], capture_output=True, text=True)
     ver = result.stdout.splitlines()[0]
     print(f"✅ {ver}")
 
@@ -65,7 +86,7 @@ def make_video(prefix: str, ext: str, fps: int, output_name: str):
 
         # -vf scale 讓寬/高都是偶數（H.264 需求）
         cmd = [
-            "ffmpeg", "-y",
+            FFMPEG, "-y",
             "-f", "concat", "-safe", "0",
             "-i", list_path,
             "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
