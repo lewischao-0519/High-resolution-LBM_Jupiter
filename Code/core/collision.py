@@ -58,13 +58,15 @@ def forcing_moments(ux: float, uy: float, Fx: float, Fy: float):
 #MRT碰撞模型(於main中調用）
 @ti.kernel
 def mrt_collision_kernel(
-    omega_shear: ti.f32, 
-    s1: ti.f32, 
-    s2: ti.f32, 
-    s4: ti.f32, 
-    s6: ti.f32, 
-    f0: ti.f32, 
-    beta: ti.f32, 
+    f_src: ti.template(),
+    f_dst: ti.template(),
+    omega_shear: ti.f32,
+    s1: ti.f32,
+    s2: ti.f32,
+    s4: ti.f32,
+    s6: ti.f32,
+    f0: ti.f32,
+    beta: ti.f32,
     epsilon: ti.f32
 ):
     ny_half = cfg.NY // 2
@@ -75,9 +77,9 @@ def mrt_collision_kernel(
             px = (x - cfg.CX[i] + cfg.NX) % cfg.NX
             py = y - cfg.CY[i]
             if py < 0 or py >= cfg.NY:
-                f_local[i] = f[cfg.OPP[i], y, x]   # 在當前格反射
+                f_local[i] = f_src[cfg.OPP[i], y, x]   # 在當前格反射
             else:
-                f_local[i] = f[i, py, px]
+                f_local[i] = f_src[i, py, px]
 
         # 2. 巨觀量
         rho = 0.0; vx = 0.0; vy = 0.0
@@ -142,18 +144,12 @@ def mrt_collision_kernel(
         for i in ti.static(range(9)):
             v = 0.0
             for j in ti.static(range(9)): v += M_inv[i,j]*m_star[j]
-            f_new[i, y, x] = ti.max(v, 1e-8)
+            f_dst[i, y, x] = ti.max(v, 1e-8)
 
         rho_field[y, x] = rho
         ux_field[y, x] = vx_half
         uy_field[y, x] = vy_half if (y != 0 and y != cfg.NY-1) else 0.0
         
-#裁減負值（安全措施）（於main中調用）
-@ti.kernel
-def swap_fields():
-    for i, y, x in f:
-        f[i, y, x], f_new[i, y, x] = f_new[i, y, x], f[i, y, x]
-
 #初始化平衡分佈（於main中調用）
 @ti.kernel
 def init_fields_kernel(U0: float):

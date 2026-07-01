@@ -14,7 +14,7 @@ utils/make_video.py
   python3 utils/make_video.py --fps 30    # 自訂幀率
 """
 
-import os, sys, glob, subprocess, argparse
+import os, sys, glob, subprocess, argparse, tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRAMES_DIR = os.path.join(ROOT, "output", "frames")
@@ -22,10 +22,14 @@ OUT_DIR    = os.path.join(ROOT, "output")
 
 
 def check_ffmpeg():
-    result = subprocess.run(["ffmpeg", "-version"],
-                            capture_output=True, text=True)
-    if result.returncode != 0:
-        print("❌ ffmpeg 未安裝。請執行：brew install ffmpeg")
+    try:
+        result = subprocess.run(["ffmpeg", "-version"],
+                                capture_output=True, text=True)
+    except FileNotFoundError:
+        result = None
+    if result is None or result.returncode != 0:
+        print("❌ 找不到 ffmpeg。macOS: brew install ffmpeg；"
+              "Windows: https://ffmpeg.org/download.html 下載後將 bin 加入 PATH。")
         sys.exit(1)
     ver = result.stdout.splitlines()[0]
     print(f"✅ {ver}")
@@ -45,22 +49,38 @@ def make_video(prefix: str, ext: str, fps: int, output_name: str):
         return
 
     out_path = os.path.join(OUT_DIR, output_name)
-    # ffmpeg 用 glob 輸入（-pattern_type glob）
-    # -vf scale 讓寬/高都是偶數（H.264 需求）
-    cmd = [
-        "ffmpeg", "-y",
-        "-framerate", str(fps),
-        "-pattern_type", "glob",
-        "-i", pattern,
-        "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-        "-c:v", "libx264",
-        "-pix_fmt", "yuv420p",
-        "-crf", "18",          # 品質 0–51，越小越好
-        "-preset", "slow",
-        out_path
-    ]
-    print(f"\n🎬 合成 {prefix} → {output_name}  ({len(frames)} frames @ {fps} fps)")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # 用 concat demuxer（跨平台，Windows 也支援；-pattern_type glob 僅限 Unix）
+    # 寫一份 frame 清單到暫存檔，交給 ffmpeg。
+    list_fd, list_path = tempfile.mkstemp(suffix=".txt")
+    try:
+        with os.fdopen(list_fd, "w", encoding="utf-8") as f:
+            for fp in frames:
+                # concat 格式需正斜線且路徑跳脫單引號
+                safe = fp.replace("\\", "/").replace("'", "'\\''")
+                f.write(f"file '{safe}'\n")
+                f.write(f"duration {1.0 / fps}\n")
+            # concat demuxer 需重複最後一幀才會顯示其 duration
+            last = frames[-1].replace("\\", "/").replace("'", "'\\''")
+            f.write(f"file '{last}'\n")
+
+        # -vf scale 讓寬/高都是偶數（H.264 需求）
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "concat", "-safe", "0",
+            "-i", list_path,
+            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-r", str(fps),
+            "-crf", "18",          # 品質 0–51，越小越好
+            "-preset", "slow",
+            out_path
+        ]
+        print(f"\n🎬 合成 {prefix} → {output_name}  ({len(frames)} frames @ {fps} fps)")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    finally:
+        os.remove(list_path)
+
     if result.returncode == 0:
         size_mb = os.path.getsize(out_path) / 1e6
         print(f"   ✅ 已存：{out_path}  ({size_mb:.1f} MB)")

@@ -18,7 +18,7 @@ from core.collision import (
     f, f_new,
     rho_field, ux_field, uy_field,
     Fx_field, Fy_field,
-    swap_fields,mrt_collision_kernel,init_fields,
+    mrt_collision_kernel,init_fields,
 )
 from core.forcing import (
     #apply_coriolis_drag_update_f,
@@ -79,14 +79,17 @@ def run_simulation():
         'omega_skew'    : [],   # 渦度偏態（負 → 反氣旋主導）
     }
 
+    #ping-pong 緩衝（避免每步整場複製）
+    src, dst = f, f_new
+
     #運行迴圈
     for step in range(cfg.MAX_STEPS+1):
         #模擬
         if step >= (cfg.WARMUP_STEPS) and step % 100 == 0:
             update_zonal_noise(cfg.alpha, cfg.sigma)          #仍先更新AR(1)噪音
         #純LBM+外力（streaming+MRT+forcing）
-        mrt_collision_kernel(cfg.OMEGA,cfg.s1,cfg.s2,cfg.s4,cfg.s6,cfg.F0,cfg.BETA,cfg.EPSILON)   #已包含科氏力、阻尼、噪音
-        swap_fields()
+        mrt_collision_kernel(src, dst, cfg.OMEGA,cfg.s1,cfg.s2,cfg.s4,cfg.s6,cfg.F0,cfg.BETA,cfg.EPSILON)   #已包含科氏力、阻尼、噪音
+        src, dst = dst, src   #交換讀寫緩衝（僅換指標，不搬資料）
 
         #紀錄
         if step % cfg.SAVE_EVERY == 0:
