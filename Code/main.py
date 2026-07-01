@@ -1,5 +1,5 @@
 #外掛工具
-import os, sys, subprocess
+import os, sys, subprocess, shutil, csv
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -146,28 +146,34 @@ def run_simulation():
 
 
 def _make_videos():
-    """模擬結束後自動合成影片（需要 ffmpeg）"""
+    """模擬結束後自動合成影片，完成後刪除暫存 frames。"""
     script = os.path.join(ROOT, "utils", "make_video.py")
     print("\n🎬 開始合成影片...")
     result = subprocess.run(
-        [sys.executable, script, "--fps", "24", "--fps-sparse", "8"],
-        capture_output=False   # 直接印到終端
+        [sys.executable, script, "--fps", "10", "--fps-sparse", "4"],
+        capture_output=False
     )
     if result.returncode != 0:
         print("⚠️  影片合成失敗（ffmpeg 未安裝？），請手動執行：")
         print(f"   python3 utils/make_video.py")
+        return
+    # 清除暫存 frames 資料夾
+    frames_dir = os.path.join(ROOT, "output", "frames")
+    if os.path.isdir(frames_dir):
+        shutil.rmtree(frames_dir)
+        print(f"  🗑️  已刪除暫存 frames：{frames_dir}")
 
 
 #記錄總結
 def _save_summary(log: dict):
-    """儲存最終時間序列摘要圖（2 張：基礎 + 延伸診斷）"""
+    """儲存 summary.png 與 log.csv"""
     steps = log['step']
     if len(steps) == 0:
         return
 
-    # ── 圖1：基礎摘要（原有）──
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    fig.suptitle("Jupiter LBM — Simulation Summary", fontsize=13)
+    # ── summary.png：2×3 全診斷量一圖 ──
+    fig, axes = plt.subplots(2, 3, figsize=(18, 8))
+    fig.suptitle("Jupiter LBM — Simulation Summary", fontsize=14)
 
     axes[0, 0].plot(steps, log['u_rms'], color='steelblue')
     axes[0, 0].set_title("RMS Velocity")
@@ -179,106 +185,77 @@ def _save_summary(log: dict):
     axes[0, 1].set_ylabel("# of jets")
     axes[0, 1].grid(True, linestyle='--', alpha=0.5)
 
-    axes[1, 0].plot(steps, log['E_slope'], color='firebrick')
-    axes[1, 0].axhline(-5/3, color='k', linestyle='--', linewidth=0.8, label='-5/3')
-    axes[1, 0].axhline(-3,   color='b', linestyle='--', linewidth=0.8, label='-3')
-    axes[1, 0].set_title("Energy Spectrum Slope")
-    axes[1, 0].set_ylabel("α  (E~k^α)")
+    axes[0, 2].plot(steps, log['E_slope'], color='firebrick')
+    axes[0, 2].axhline(-5/3, color='k', linestyle='--', linewidth=0.8, label='-5/3')
+    axes[0, 2].axhline(-3,   color='b', linestyle='--', linewidth=0.8, label='-3')
+    axes[0, 2].set_title("Energy Spectrum Slope")
+    axes[0, 2].set_ylabel("α  (E~k^α)")
+    axes[0, 2].legend(fontsize=8)
+    axes[0, 2].grid(True, linestyle='--', alpha=0.5)
+
+    axes[1, 0].plot(steps, log['zonal_frac'], color='purple')
+    axes[1, 0].axhline(0.6, color='k', linestyle='--', linewidth=0.8, label='Jupiter ~60%')
+    axes[1, 0].set_title("Zonal KE Fraction")
+    axes[1, 0].set_ylabel("KE_zonal / KE_total")
+    axes[1, 0].set_ylim(0, 1)
     axes[1, 0].legend(fontsize=8)
     axes[1, 0].grid(True, linestyle='--', alpha=0.5)
 
-    axes[1, 1].plot(steps, log['zonal_frac'], color='purple')
-    axes[1, 1].axhline(0.6, color='k', linestyle='--', linewidth=0.8, label='Jupiter ~60%')
-    axes[1, 1].set_title("Zonal KE Fraction  (KE_zonal / KE_total)")
-    axes[1, 1].set_ylabel("fraction")
-    axes[1, 1].set_ylim(0, 1)
+    axes[1, 1].plot(steps, log['omega_rms'],  color='darkgreen', label='ω_rms')
+    axes[1, 1].plot(steps, log['RS_mean'],     color='darkorchid', label="|<u'v'>|")
+    axes[1, 1].set_title("Vorticity RMS & Reynolds Stress")
+    axes[1, 1].set_ylabel("magnitude")
     axes[1, 1].legend(fontsize=8)
     axes[1, 1].grid(True, linestyle='--', alpha=0.5)
+
+    axes[1, 2].plot(steps, log['omega_skew'], color='firebrick')
+    axes[1, 2].axhline(0, color='k', linewidth=0.8, linestyle='--')
+    axes[1, 2].fill_between(steps, log['omega_skew'], 0,
+                             where=[v < 0 for v in log['omega_skew']],
+                             alpha=0.25, color='blue', label='Anticyclone-dominant')
+    axes[1, 2].fill_between(steps, log['omega_skew'], 0,
+                             where=[v >= 0 for v in log['omega_skew']],
+                             alpha=0.25, color='red', label='Cyclone-dominant')
+    axes[1, 2].set_title("Vorticity Skewness  (< 0 = Jupiter-like)")
+    axes[1, 2].set_ylabel("skewness")
+    axes[1, 2].legend(fontsize=7)
+    axes[1, 2].grid(True, linestyle='--', alpha=0.5)
 
     for ax in axes.flat:
         ax.set_xlabel("Step")
     plt.tight_layout()
     fig.savefig(os.path.join(cfg.OUTPUT_DIR, "summary.png"), dpi=200)
     plt.close(fig)
+    print(f"  → summary.png saved.")
 
-    # ── 圖2：延伸診斷（新增）──
-    fig2, axs = plt.subplots(2, 3, figsize=(16, 8))
-    fig2.suptitle("Jupiter LBM — Extended Diagnostics (vs. Observations)", fontsize=13)
-
-    # (0,0) Rhines 尺度
-    axs[0, 0].plot(steps, log['L_beta'], color='teal')
-    axs[0, 0].set_title("Rhines Scale  L_β = √(U_rms/β)")
-    axs[0, 0].set_ylabel("L_β  (lattice units)")
-    # 理論噴流間距 ≈ 2π L_β
-    ax2 = axs[0, 0].twinx()
-    ax2.plot(steps, [2*np.pi*v for v in log['L_beta']], color='teal', alpha=0.3, linestyle=':')
-    ax2.set_ylabel("2π L_β (predicted jet spacing)", color='teal', fontsize=8)
-    axs[0, 0].grid(True, linestyle='--', alpha=0.5)
-
-    # (0,1) β-Rossby 數
-    axs[0, 1].plot(steps, log['Ro_beta'], color='goldenrod')
-    axs[0, 1].set_title("β-Rossby Number  Ro_β")
-    axs[0, 1].set_ylabel("Ro_β")
-    axs[0, 1].grid(True, linestyle='--', alpha=0.5)
-
-    # (0,2) KE 分解
-    axs[0, 2].plot(steps, log['KE_zonal'], label='KE_zonal', color='royalblue')
-    axs[0, 2].plot(steps, log['KE_eddy'],  label='KE_eddy',  color='salmon')
-    axs[0, 2].set_title("Kinetic Energy Decomposition")
-    axs[0, 2].set_ylabel("KE  (lattice units²)")
-    axs[0, 2].legend(fontsize=8)
-    axs[0, 2].grid(True, linestyle='--', alpha=0.5)
-
-    # (1,0) Reynolds stress
-    axs[1, 0].plot(steps, log['RS_mean'], color='darkorchid')
-    axs[1, 0].set_title("Reynolds Stress  |<u'v'>|  (domain mean)")
-    axs[1, 0].set_ylabel("RS_mean")
-    axs[1, 0].grid(True, linestyle='--', alpha=0.5)
-
-    # (1,1) 渦度 RMS
-    axs[1, 1].plot(steps, log['omega_rms'], color='darkgreen')
-    axs[1, 1].set_title("Vorticity RMS  ω_rms")
-    axs[1, 1].set_ylabel("ω_rms")
-    axs[1, 1].grid(True, linestyle='--', alpha=0.5)
-
-    # (1,2) 渦度偏態（最關鍵：負 → 反氣旋主導，對應木星）
-    axs[1, 2].plot(steps, log['omega_skew'], color='firebrick')
-    axs[1, 2].axhline(0, color='k', linewidth=0.8, linestyle='--')
-    axs[1, 2].fill_between(steps, log['omega_skew'], 0,
-                            where=[v < 0 for v in log['omega_skew']],
-                            alpha=0.25, color='blue', label='Anticyclone-dominant (Jupiter-like)')
-    axs[1, 2].fill_between(steps, log['omega_skew'], 0,
-                            where=[v >= 0 for v in log['omega_skew']],
-                            alpha=0.25, color='red', label='Cyclone-dominant')
-    axs[1, 2].set_title("Vorticity Skewness  (< 0 = Jupiter-like)")
-    axs[1, 2].set_ylabel("skewness")
-    axs[1, 2].legend(fontsize=7)
-    axs[1, 2].grid(True, linestyle='--', alpha=0.5)
-
-    for ax in axs.flat:
-        ax.set_xlabel("Step")
-    plt.tight_layout()
-    fig2.savefig(os.path.join(cfg.OUTPUT_DIR, "summary_diagnostics.png"), dpi=200)
-    plt.close(fig2)
-
-    # ── 噴流位置時空圖（hovmöller diagram）──
-    if len(log['jet_positions']) > 0:
-        fig3, ax3 = plt.subplots(figsize=(10, 5))
-        for t_idx, (s, pos_list) in enumerate(zip(steps, log['jet_positions'])):
-            if pos_list:
-                ax3.scatter([s]*len(pos_list), pos_list,
-                            s=4, c='navy', alpha=0.5)
-        ax3.set_xlabel("Step")
-        ax3.set_ylabel("y (latitude index)")
-        ax3.set_title("Jet Position Hovmöller Diagram")
-        ax3.grid(True, linestyle='--', alpha=0.3)
-        plt.tight_layout()
-        fig3.savefig(os.path.join(cfg.OUTPUT_DIR, "jet_hovmoller.png"), dpi=200)
-        plt.close(fig3)
-
-    # 儲存數值資料
-    np.save(os.path.join(cfg.DATA_DIR, "log.npy"), log)
-    print(f"  → summary.png and log.npy saved.")
+    # ── log.csv：數據資料表 ──
+    csv_path = os.path.join(cfg.DATA_DIR, "log.csv")
+    # jet_positions 為 list-of-lists，序列化為字串
+    columns = ['step', 'u_rms', 'u_max', 'jet_count', 'E_slope',
+               'L_beta', 'Ro_beta', 'jet_positions',
+               'KE_zonal', 'KE_eddy', 'zonal_frac',
+               'RS_mean', 'omega_rms', 'omega_skew']
+    with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(columns)
+        for i in range(len(steps)):
+            writer.writerow([
+                log['step'][i],
+                f"{log['u_rms'][i]:.6f}",
+                f"{log['u_max'][i]:.6f}",
+                log['jet_count'][i],
+                f"{log['E_slope'][i]:.4f}",
+                f"{log['L_beta'][i]:.4f}",
+                f"{log['Ro_beta'][i]:.6e}",
+                '|'.join(map(str, log['jet_positions'][i])),  # e.g. "12|45|89"
+                f"{log['KE_zonal'][i]:.6e}",
+                f"{log['KE_eddy'][i]:.6e}",
+                f"{log['zonal_frac'][i]:.4f}",
+                f"{log['RS_mean'][i]:.6e}",
+                f"{log['omega_rms'][i]:.6e}",
+                f"{log['omega_skew'][i]:+.4f}",
+            ])
+    print(f"  → log.csv saved  ({len(steps)} rows × {len(columns)} cols)")
 
 if __name__ == "__main__":
     run_simulation()
