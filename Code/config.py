@@ -37,7 +37,13 @@ def init_constants():
 #物理參數
 #β-plane模型科氏力參數
 F0 = 2e-4                #科氏力參數基準值（根據模擬緯度調整）
-BETA = 8e-5              #科氏力梯度
+# β 以「基準解析度」定義，任意 NY 自動換算：
+#   不變量 = 極區 f_cor 邊界值 = F0 + BETA·(NY/2)
+#   要它與解析度無關，須 BETA·NY = const → BETA = BETA_REF · NY_REF / NY
+# 這樣顯式科氏力每步注入的能量(∝f_cor²)不隨解析度暴增，避免發散。
+NY_REF   = 256           #參數校正時的基準解析度
+BETA_REF = 8e-5          #基準解析度下的每格梯度
+BETA = BETA_REF * NY_REF / NY   #依實際 NY 動態換算（任意解析度皆可）
 
 #Reighly drag
 EPSILON = 3e-5           #摩擦係數
