@@ -1,5 +1,5 @@
 #外掛工具
-import os, sys
+import os, sys, subprocess
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -142,7 +142,22 @@ def run_simulation():
                     save_path=f"output/frames/spectrum_{step:06d}.png")
     
     _save_summary(log)
-        
+    _make_videos()
+
+
+def _make_videos():
+    """模擬結束後自動合成影片（需要 ffmpeg）"""
+    script = os.path.join(ROOT, "utils", "make_video.py")
+    print("\n🎬 開始合成影片...")
+    result = subprocess.run(
+        [sys.executable, script, "--fps", "24", "--fps-sparse", "8"],
+        capture_output=False   # 直接印到終端
+    )
+    if result.returncode != 0:
+        print("⚠️  影片合成失敗（ffmpeg 未安裝？），請手動執行：")
+        print(f"   python3 utils/make_video.py")
+
+
 #記錄總結
 def _save_summary(log: dict):
     """儲存最終時間序列摘要圖（2 張：基礎 + 延伸診斷）"""
