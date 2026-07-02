@@ -131,18 +131,18 @@ def run_simulation():
                 print(f"⚠️ WARNING: Maximum velocity u_max = {u_max:.5f} exceeds the stability limit 0.3!")
 
             plot_velocity_magnitude(ux_np, uy_np, step,
-                save_path=f"output/frames/vel_{step:06d}.jpg")
+                save_path=f"output/frames/vel_{step:08d}.jpg")
             plot_vorticity(omega_np, step,
-                save_path=f"output/frames/vort_{step:06d}.jpg")
+                save_path=f"output/frames/vort_{step:08d}.jpg")
             print(f"Step {step:6d} | U_rms={u_rms:.5f} | U_max={u_max:.5f} | Jets={jets} | "
                   f"E_slope={slope:.2f} | L_β={L_b:.1f} | KE_zon%={ke['zonal_fraction']*100:.1f}% | "
                   f"ω_skew={vs['omega_skew']:+.3f} | AR={'ON' if step>=(cfg.WARMUP_STEPS) else 'OFF'}")
 
             if step % cfg.SAVE_SPECTRUM == 0:
                 plot_zonal_profile(zm['y'], zm['u_bar'], step,
-                    save_path=f"output/frames/zonal_{step:06d}.png")
+                    save_path=f"output/frames/zonal_{step:08d}.png")
                 plot_energy_spectrum(k_arr, E_arr, step, slope=slope,
-                    save_path=f"output/frames/spectrum_{step:06d}.png")
+                    save_path=f"output/frames/spectrum_{step:08d}.png")
     
     _save_summary(log)
     _make_videos()
