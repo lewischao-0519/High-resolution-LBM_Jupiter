@@ -10,8 +10,12 @@ pip install -r requirements.txt
 python main.py
 ```
 
-執行後會在 `output/` 產生逐步快照，模擬結束時自動彙整成 `output/summary.png`、
-4 支 mp4 影片，並在 `data/processed/log.csv` 留下逐步診斷數據。
+執行後會在 `output/` 產生逐步快照，模擬結束時自動輸出：
+- `output/summary.png`（3×3 診斷總覽圖）
+- `output/hovmoller.png`（Hovmöller 時空圖）
+- `output/jet_autocorr.png`（噴流持續時間分析）
+- 4 支 mp4 影片
+- `data/processed/` 下的個別診斷 CSV 與剖面 NPZ 檔
 
 ---
 
@@ -34,8 +38,7 @@ Code/
 │   ├── vorticity.py       ← 渦度場 ω_z = ∂uy/∂x − ∂ux/∂y（中央差分）
 │   ├── spectrum.py        ← 2D FFT 等向能量譜 E(k)、Kolmogorov 斜率擬合
 │   ├── zonal_mean.py      ← 緯向平均風速剖面、噴流數量統計
-│   └── diagnostics.py     ← 延伸診斷量：Rhines 尺度、β-Rossby 數、噴流位置、
-│                              帶狀/渦流動能分解、Reynolds stress、渦度偏態
+│   └── diagnostics.py     ← 延伸診斷量（見「診斷量一覽」）
 │
 ├── utils/
 │   ├── fft.py             ← 通用 FFT 工具（環形平均、波數網格）
@@ -43,14 +46,37 @@ Code/
 │   └── make_video.py      ← 用 ffmpeg 把 output/frames/ 的快照合成 mp4
 │
 ├── data/
-│   └── processed/         ← 模擬輸出的數據（log.csv 等）
+│   └── processed/
+│       ├── log.csv            ← 所有診斷純量的彙整表（每存檔步一列）
+│       ├── u_rms.csv          ┐
+│       ├── u_max.csv          │
+│       ├── jet_count.csv      │
+│       ├── E_slope.csv        │  各診斷量的獨立 CSV（每步即時寫入，
+│       ├── L_beta.csv         │  模擬中斷也不損失已記錄資料）
+│       ├── Ro_beta.csv        │
+│       ├── jet_positions.csv  │
+│       ├── KE_zonal.csv       │
+│       ├── KE_eddy.csv        │
+│       ├── zonal_frac.csv     │
+│       ├── RS_mean.csv        │
+│       ├── omega_rms.csv      │
+│       ├── omega_skew.csv     │
+│       ├── Qy_sign_changes.csv│
+│       ├── staircase_score.csv│
+│       ├── R_beta_star.csv    ┘
+│       ├── hovmoller.npz      ← ū(y,t) 二維場（Hovmöller 資料）
+│       ├── rs_profile.npz     ← ⟨u′v′⟩(y,t) 完整剖面歷史
+│       ├── qy_profile.npz     ← Q_y(y,t) 位渦梯度剖面歷史
+│       └── pv_profile.npz     ← q(y,t) PV 剖面歷史
 │
 └── output/
-    ├── frames/             ← 模擬過程中的逐步快照（模擬結束後自動清除）
-    ├── summary.png         ← 六合一診斷總結圖
-    ├── vel_evolution.mp4   ← 速度量值場動畫
-    ├── vort_evolution.mp4  ← 渦度場動畫
-    ├── zonal_evolution.mp4 ← 帶狀平均風速剖面動畫
+    ├── frames/                ← 模擬過程中的逐步快照（模擬結束後自動清除）
+    ├── summary.png            ← 3×3 診斷總結圖（9 個純量時序面板）
+    ├── hovmoller.png          ← ū(y,t) Hovmöller 圖（y 為緯度、x 為時間、色為ū）
+    ├── jet_autocorr.png       ← 各緯度自相關時間 τ_corr(y) 及與渦流翻轉時間的比值
+    ├── vel_evolution.mp4      ← 速度量值場動畫
+    ├── vort_evolution.mp4     ← 渦度場動畫
+    ├── zonal_evolution.mp4   ← 帶狀平均風速剖面動畫
     └── spectrum_evolution.mp4 ← 能量譜動畫
 ```
 
@@ -75,11 +101,14 @@ core/collision.py::mrt_collision_kernel()
             ▼（交換讀寫緩衝 src ↔ dst）
    analysis/（vorticity, spectrum, zonal_mean, diagnostics）
             │
-            ▼
-   utils/plotting.py → output/frames/*.jpg / *.png
+            ▼（每 SAVE_EVERY 步）
+   ├─ 16 個純量 → 各自 CSV（即時 append）
+   └─ 4 個剖面（u_bar, RS_profile, Qy, q_pv）→ 暫存記憶體
             │
             ▼（模擬結束）
    main.py::_save_summary() → output/summary.png, data/processed/log.csv
+   main.py::_save_profiles() → output/hovmoller.png, output/jet_autocorr.png
+                                data/processed/*.npz
    main.py::_make_videos()  → utils/make_video.py → output/*.mp4
 ```
 
@@ -89,6 +118,49 @@ core/collision.py::mrt_collision_kernel()
 |------|------|----------|
 | x（緯向 / zonal） | 週期邊界 | `collision.py` pull-scheme 中 `% NX` |
 | y（緯度 / meridional） | 半程反彈牆（no-penetration）+ 海綿層阻尼 | `collision.py` 中 `py < 0 or py >= NY` 反射，及 `SPONGE_FRAC` 阻尼帶 |
+
+---
+
+## 診斷量一覽
+
+### 純量時序（每步存 CSV + `log.csv`）
+
+| 欄位 | 物理意義 | 函式 |
+|------|----------|------|
+| `u_rms` | 全場速度 RMS | — |
+| `u_max` | 全場最大速度（穩定性監控，> 0.3 警告） | — |
+| `jet_count` | 帶狀噴流數量 | `zonal_mean::count_jet_streams` |
+| `E_slope` | 能量譜斜率 α（E∼k^α，理論值 -5/3 或 -3） | `spectrum::kolmogorov_slope` |
+| `L_beta` | Rhines 尺度（格點） | `diagnostics::rhines_scale` |
+| `Ro_beta` | β-Rossby 數 | `diagnostics::rossby_beta` |
+| `jet_positions` | 各噴流 y-index 列表（`\|` 分隔） | `diagnostics::jet_positions` |
+| `KE_zonal` | 帶狀動能 | `diagnostics::kinetic_energy_decomp` |
+| `KE_eddy` | 渦流動能 | 同上 |
+| `zonal_frac` | KE_zonal / KE_total（目標 ~60–80%） | 同上 |
+| `RS_mean` | Reynolds stress ⟨u′v′⟩ 空間平均 | `diagnostics::reynolds_stress` |
+| `omega_rms` | 渦度 RMS | `diagnostics::vorticity_stats` |
+| `omega_skew` | 渦度偏態（負值 → 反氣旋主導，木星特徵） | 同上 |
+| `Qy_sign_changes` | Q_y 符號反轉次數（> 0 → 正壓不穩定） | `diagnostics::pv_gradient` |
+| `staircase_score` | PV 階梯分數（>> 1 → 尖銳輸送屏障） | `diagnostics::pv_staircase` |
+| `R_beta_star` | Zonostrophy index（> 2.5 → 穩定噴流 regime） | `diagnostics::zonostrophy_index` |
+
+### 剖面歷史（存 NPZ，形狀 (T, NY)）
+
+| 檔案 | 內容 | 對應圖 |
+|------|------|--------|
+| `hovmoller.npz` | `u_bar(y, t)`：緯向平均東風剖面隨時間演化 | `hovmoller.png` |
+| `rs_profile.npz` | `⟨u′v′⟩(y, t)`：Reynolds stress 完整 y 剖面 | — |
+| `qy_profile.npz` | `Q_y(y, t) = β − ∂²ū/∂y²`：位渦梯度剖面 | — |
+| `pv_profile.npz` | `q(y, t) = β·y − dū/dy`：PV 剖面 | — |
+
+NPZ 讀取範例：
+```python
+import numpy as np
+data = np.load('data/processed/hovmoller.npz')
+u_bar = data['u_bar']   # shape (T, NY)
+steps = data['steps']   # shape (T,)
+y     = data['y']       # shape (NY,)
+```
 
 ---
 
@@ -142,7 +214,7 @@ Pull-scheme 的優點是可以直接寫入目標格點、避免 GPU 平行寫入
 **科氏力（Coriolis force）**
 旋轉參考系中，流體因慣性偏轉所感受到的視外力，是行星尺度大氣環流（信風、噴流、
 颱風）形成的根本原因。程式中以科氏參數 `f_cor` 表示，並施加垂直於速度方向的力
-（`Fx_cor = ρ·f_cor·vy`, `Fy_cor = -ρ·f_cor·vx`），對應 `core/collision.py` 第 107–111 行。
+（`Fx_cor = ρ·f_cor·vy`, `Fy_cor = -ρ·f_cor·vx`）。
 
 **β-plane 近似**
 把球面上隨緯度變化的科氏參數 `f = 2Ω sin(φ)` 在局部區域線性化為
@@ -162,46 +234,57 @@ Pull-scheme 的優點是可以直接寫入目標格點、避免 GPU 平行寫入
 **帶狀流 / 噴流（Zonal jet）**
 沿緯度方向（東西向）延伸、南北方向速度快速變化的窄長高速氣流帶，是木星表面
 可見條紋的成因，也是本模擬要重現的核心現象。程式透過緯向平均風速剖面
-`⟨u_x⟩_x(y)` 的局部極值來偵測噴流位置與數量
-（`analysis/zonal_mean.py::count_jet_streams`、`analysis/diagnostics.py::jet_positions`）。
+`⟨u_x⟩_x(y)` 的局部極值來偵測噴流位置與數量。
 
-**海綿層（Sponge layer）**
-在計算域南北邊界附近額外施加的強阻尼區，用來吸收向邊界傳播的波動、避免非物理
-的反射污染內部流場，是有限域模擬中常見的「人工邊界層」技巧。對應 `config.py`
-的 `SPONGE_FRAC`（厚度佔比）、`EPSILON_MAX`（邊界最大阻尼），實作在
-`core/collision.py` 的 `blend` / `eps_local` 計算。
+**Hovmöller 圖（Hovmöller diagram）**
+以 y 軸（緯度）為空間維度、x 軸為時間、顏色代表 ū(y,t) 的二維時空圖，是追蹤
+「噴流生成 → 漂移 → 合併 → 消失」動力學過程最直接的工具。本程式在模擬結束後輸出
+`output/hovmoller.png`，原始資料存在 `data/processed/hovmoller.npz`。
 
-**Rayleigh drag（線性摩擦阻尼）**
-正比於局部速度、方向相反的阻尼力 `F_damp = -ε·ρ·u`，用來代表次網格尺度的
-摩擦耗散，讓系統能達到統計穩態而不會無限累積動能。對應 `config.py::EPSILON`。
+**噴流自相關時間 τ_corr**
+對固定緯度 y 的 ū(y, t) 時序做 FFT 自相關，找到訊號衰減至 e⁻¹ 所需的時間。
+與渦流翻轉時間（eddy turnover time）τ_eddy ≈ L_β / U_rms 的比值 τ_corr / τ_eddy
+直接量化噴流是否「站穩」：比值 >> 1 表示噴流持續時間遠超一個渦流翻轉週期，
+可認為具有統計意義的穩定性。對應 `main.py::_jet_autocorr()`，輸出 `output/jet_autocorr.png`。
 
-**AR(1) 噪音（一階自迴歸噪音）**
-`noise(t) = α·noise(t-1) + σ·randn()`，一種帶有記憶性（時間相關）的隨機噪音，
-用來在緯向（k_x = 0）尺度持續注入小擾動、打破對稱性並維持湍流的非平衡狀態，
-避免模擬陷入靜止的對稱解。對應 `core/forcing.py::update_zonal_noise()`，
-`config.py` 的 `Tc`（相關時間尺度）、`alpha`、`sigma`。
+**Rayleigh–Kuo 正壓不穩定判據**
+位渦梯度 `Q_y(y) = β − ∂²ū/∂y²` 在 y 方向變號是正壓不穩定的必要條件。若剖面中有
+n 處符號反轉，表示流場中有 n 個潛在的不穩定區，帶狀噴流容易被剪切力撕裂。
+本程式追蹤 `Qy_sign_changes(t)` 並保存完整 `Q_y(y, t)` 剖面於 `qy_profile.npz`。
+對應 `analysis/diagnostics.py::pv_gradient()`。
 
-**渦度（Vorticity）ω_z**
-流體局部旋轉強弱的量度，定義為 `ω_z = ∂u_y/∂x − ∂u_x/∂y`。木星大紅斑等
-巨大反氣旋渦漩即為局部渦度極值區域。程式以中央差分計算
-（`analysis/vorticity.py::compute_vorticity_kernel`）。
+**PV staircase（位渦階梯結構）**
+穩定帶狀噴流對應的位渦分布 `q(y) = β·y − dū/dy` 應呈現階梯狀——「平台（混合均勻區）+
+陡峭邊界（輸送屏障）」，陡峭的 PV 跳躍代表強韌的渦流輸送屏障。
+本程式用 `staircase_score = max|dq/dy| / mean|dq/dy|` 量化：接近 1 表示平滑漸變（屏障弱），
+>> 5 表示真正的 PV 階梯結構。對應 `analysis/diagnostics.py::pv_staircase()`。
 
-**渦度偏態（Vorticity skewness）**
-渦度分布的三階統計量 `⟨ω³⟩ / ⟨ω²⟩^{3/2}`，用來判斷渦漩的不對稱性。
-木星觀測顯示渦度分布呈負偏態（反氣旋 anticyclone 較強較多），本程式以此
-作為模擬是否重現真實木星動力學特徵的診斷指標
-（`analysis/diagnostics.py::vorticity_stats`）。
+**Zonostrophy index R_β***
+判斷模擬是否落在「zonostrophic turbulence」（穩定帶狀流）regime 的無因次指標：
+
+```
+R_β* = L_R / L_t
+  L_R = √(2·U_rms / β)      ← Rhines 尺度
+  L_t = (ε / β³)^{1/5}      ← 渦流翻轉時間 = Rossby 波週期的過渡尺度
+  ε   = EPSILON · KE_total   ← 穩態耗散率（= 能量注入率）
+```
+
+判斷依據（Sukoriansky et al. 2007）：
+- `R_β* ≳ 2.5` → zonostrophic regime，帶狀流穩定主導
+- `R_β* ≲ 1.5` → 摩擦主導，噴流無法持續形成
+
+對應 `analysis/diagnostics.py::zonostrophy_index()`，每步結果存入 `R_beta_star.csv`。
 
 **Reynolds stress（雷諾應力）⟨u′v′⟩**
 擾動速度分量的協方差 `⟨(u - ū)(v - v̄)⟩_x`，代表渦漩對平均流的動量輸送。
-其緯向梯度正是驅動帶狀噴流形成/維持的關鍵機制（對應 Andrews & McIntyre 的
-EP-flux 理論）。對應 `analysis/diagnostics.py::reynolds_stress()`。
+其 y 梯度的輻合 / 輻散決定噴流的加速或減速。本程式保存完整 y 剖面（`rs_profile.npz`），
+而非僅空間平均純量（`RS_mean`），以便觀察噴流被剪切力破壞前的輻合結構瓦解過程。
 
 **帶狀動能 / 渦流動能分解（KE_zonal / KE_eddy）**
 把總動能分解為「緯向平均流動能」（`KE_zonal = 0.5⟨ū² + v̄²⟩`）與「相對於平均流
 的渦漩動能」（`KE_eddy = KE_total - KE_zonal`）。當逆能量串聯（inverse energy
-cascade）有效時，`KE_zonal / KE_total` 會顯著升高（木星觀測約 60–80%），是判斷
-帶狀流是否成功自發形成的核心指標。對應 `analysis/diagnostics.py::kinetic_energy_decomp()`。
+cascade）有效時，`KE_zonal / KE_total` 會顯著升高（木星觀測約 60–80%）。
+對應 `analysis/diagnostics.py::kinetic_energy_decomp()`。
 
 **逆能量串聯（Inverse energy cascade）**
 二維湍流的特有現象：能量傾向從小尺度渦漩向大尺度結構匯聚（與三維湍流的能量
@@ -213,33 +296,73 @@ cascade）有效時，`KE_zonal / KE_total` 會顯著升高（木星觀測約 60
 
 **Kolmogorov 斜率 α**
 在對數座標下擬合 `E(k) ~ k^α` 得到的斜率。三維各向同性湍流理論值為 `α = -5/3`；
-二維湍流逆能量串聯區域理論值可達 `α ≈ -3`。用來判斷模擬中湍流的統計特性是否
-符合理論預期。對應 `analysis/spectrum.py::kolmogorov_slope()`。
+二維湍流逆能量串聯區域理論值可達 `α ≈ -3`。對應 `analysis/spectrum.py::kolmogorov_slope()`。
+
+**海綿層（Sponge layer）**
+在計算域南北邊界附近額外施加的強阻尼區，用來吸收向邊界傳播的波動、避免非物理
+的反射污染內部流場。對應 `config.py` 的 `SPONGE_FRAC`（厚度佔比）、`EPSILON_MAX`（邊界最大阻尼）。
+
+**Rayleigh drag（線性摩擦阻尼）**
+正比於局部速度、方向相反的阻尼力 `F_damp = -ε·ρ·u`，用來代表次網格尺度的
+摩擦耗散，讓系統能達到統計穩態。對應 `config.py::EPSILON`。
+
+**AR(1) 噪音（一階自迴歸噪音）**
+`noise(t) = α·noise(t-1) + σ·randn()`，一種帶有記憶性（時間相關）的隨機噪音，
+用來在緯向（k_x = 0）尺度持續注入小擾動、打破對稱性並維持湍流的非平衡狀態。
+對應 `core/forcing.py::update_zonal_noise()`，`config.py` 的 `Tc`、`alpha`、`sigma`。
+
+**渦度（Vorticity）ω_z**
+流體局部旋轉強弱的量度，定義為 `ω_z = ∂u_y/∂x − ∂u_x/∂y`。
+程式以中央差分計算（`analysis/vorticity.py::compute_vorticity_kernel`）。
+
+**渦度偏態（Vorticity skewness）**
+渦度分布的三階統計量 `⟨ω³⟩ / ⟨ω²⟩^{3/2}`，用來判斷渦漩的不對稱性。
+木星觀測顯示渦度分布呈負偏態（反氣旋 anticyclone 較強較多），本程式以此
+作為模擬是否重現真實木星動力學特徵的診斷指標。
 
 ### 其他工程名詞
 
 **Taichi**
 一個 Python 的高效能運算框架，可以把用 Python 語法寫的核函數（`@ti.kernel` /
 `@ti.func`）自動編譯到 GPU（CUDA/Metal/Vulkan）執行，是本程式達到大規模格點
-（512×256、70 萬步）即時模擬的關鍵。對應 `config.py::ti.init(arch=ti.gpu, ...)`。
+（512×256、70 萬步）即時模擬的關鍵。
 
 **ping-pong 緩衝（Double buffering）**
 用兩塊記憶體（`f` 與 `f_new`）交替作為讀取來源與寫入目的地，每步只需交換指標
 （`src, dst = dst, src`），避免同一時刻讀寫同一塊記憶體造成的資料競爭，同時省去
-整場複製的開銷。對應 `main.py` 第 83、92 行。
+整場複製的開銷。
 
 ---
 
 ## 輸出說明
 
+### 圖表
+
 | 檔案 | 內容 |
 |------|------|
-| `output/summary.png` | 2×3 診斷總覽圖：U_rms、噴流數、能量譜斜率、帶狀動能佔比、渦度 RMS/Reynolds stress、渦度偏態 |
-| `data/processed/log.csv` | 每個存檔步的完整診斷數據（含 Rhines 尺度、β-Rossby 數、噴流位置等） |
+| `output/summary.png` | **3×3** 診斷總覽圖：U_rms、噴流數、能量譜斜率、帶狀動能佔比、渦度 RMS/Reynolds stress、渦度偏態、R_β*、Q_y 符號反轉、PV 階梯分數 |
+| `output/hovmoller.png` | ū(y,t) Hovmöller 圖（RdBu_r 配色，y=緯度、x=時間） |
+| `output/jet_autocorr.png` | 各緯度自相關時間 τ_corr(y) 及比值 τ_corr / τ_eddy |
+
+### 影片
+
+| 檔案 | 內容 |
+|------|------|
 | `output/vel_evolution.mp4` | 速度量值場隨時間演化 |
 | `output/vort_evolution.mp4` | 渦度場隨時間演化 |
 | `output/zonal_evolution.mp4` | 帶狀平均風速剖面演化（低頻採樣） |
 | `output/spectrum_evolution.mp4` | 能量譜演化（低頻採樣） |
+
+### 資料檔
+
+| 檔案 | 格式 | 內容 |
+|------|------|------|
+| `data/processed/log.csv` | CSV | 所有診斷純量彙整（17 欄） |
+| `data/processed/<metric>.csv` | CSV | 各診斷量獨立時序（每步即時寫入，共 16 個） |
+| `data/processed/hovmoller.npz` | NPZ | `u_bar(T, NY)`、`steps(T)`、`y(NY)` |
+| `data/processed/rs_profile.npz` | NPZ | `RS_profile(T, NY)`、`steps`、`y` |
+| `data/processed/qy_profile.npz` | NPZ | `Qy(T, NY)`、`steps`、`y` |
+| `data/processed/pv_profile.npz` | NPZ | `q_pv(T, NY)`、`steps`、`y` |
 
 ## 主要參數（`config.py`）
 
@@ -247,8 +370,9 @@ cascade）有效時，`KE_zonal / KE_total` 會顯著升高（木星觀測約 60
 |------|------|--------|
 | `NX`, `NY` | 網格解析度（緯向 × 緯度方向） | 512 × 256 |
 | `MAX_STEPS` | 總演化步數 | 700000 |
+| `SAVE_EVERY` | 每幾步存一幀並計算診斷量 | 5000 |
 | `F0`, `BETA` | β-plane 科氏參數基準值與梯度 | 2e-4, 依 NY 換算 |
-| `EPSILON` | Rayleigh drag 摩擦係數 | 3e-5 |
+| `EPSILON` | Rayleigh drag 摩擦係數（同時用於估算能量注入率 ε） | 3e-5 |
 | `SPONGE_FRAC`, `EPSILON_MAX` | 海綿層厚度比例、最大阻尼 | 0.15, 7e-5 |
 | `Tc`, `sigma` | AR(1) 噪音相關時間、振幅 | 400, 1e-6 |
 | `WARMUP_STEPS` | 噪音注入前的暖機步數 | 100000 |

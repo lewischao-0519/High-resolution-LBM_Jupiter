@@ -34,6 +34,8 @@ from analysis.diagnostics import (
     rhines_scale, rossby_beta,
     jet_positions, kinetic_energy_decomp,
     reynolds_stress, vorticity_stats,
+    pv_gradient, pv_staircase,
+    estimate_energy_injection, zonostrophy_index,
 )
 
 #視覺化工具
@@ -63,8 +65,12 @@ _METRIC_HEADERS = [
     ('KE_eddy',       ['step', 'KE_eddy']),
     ('zonal_frac',    ['step', 'zonal_frac']),
     ('RS_mean',       ['step', 'RS_mean']),
-    ('omega_rms',     ['step', 'omega_rms']),
-    ('omega_skew',    ['step', 'omega_skew']),
+    ('omega_rms',        ['step', 'omega_rms']),
+    ('omega_skew',       ['step', 'omega_skew']),
+    # ── 新增診斷純量 ──
+    ('Qy_sign_changes',  ['step', 'Qy_sign_changes']),
+    ('staircase_score',  ['step', 'staircase_score']),
+    ('R_beta_star',      ['step', 'R_beta_star']),
 ]
 
 def _init_metric_csvs():
@@ -76,22 +82,26 @@ def _init_metric_csvs():
     print(f"  → {len(_METRIC_HEADERS)} 個診斷量 CSV 已初始化 ({cfg.DATA_DIR}/)")
 
 def _append_metric_csvs(step: int, u_rms, u_max, jet_count, E_slope,
-                         L_b, Ro_b, jpos, ke, rs, vs):
+                         L_b, Ro_b, jpos, ke, rs, vs,
+                         Qy_sign_changes, staircase_score, R_beta_star):
     """將本步診斷量逐一追加到各自的 CSV 檔案。"""
     rows = {
-        'u_rms'        : f"{u_rms:.6f}",
-        'u_max'        : f"{u_max:.6f}",
-        'jet_count'    : jet_count,
-        'E_slope'      : f"{E_slope:.4f}",
-        'L_beta'       : f"{L_b:.4f}",
-        'Ro_beta'      : f"{Ro_b:.6e}",
-        'jet_positions': '|'.join(map(str, jpos)),
-        'KE_zonal'     : f"{ke['KE_zonal']:.6e}",
-        'KE_eddy'      : f"{ke['KE_eddy']:.6e}",
-        'zonal_frac'   : f"{ke['zonal_fraction']:.4f}",
-        'RS_mean'      : f"{rs['RS_mean']:.6e}",
-        'omega_rms'    : f"{vs['omega_rms']:.6e}",
-        'omega_skew'   : f"{vs['omega_skew']:+.4f}",
+        'u_rms'          : f"{u_rms:.6f}",
+        'u_max'          : f"{u_max:.6f}",
+        'jet_count'      : jet_count,
+        'E_slope'        : f"{E_slope:.4f}",
+        'L_beta'         : f"{L_b:.4f}",
+        'Ro_beta'        : f"{Ro_b:.6e}",
+        'jet_positions'  : '|'.join(map(str, jpos)),
+        'KE_zonal'       : f"{ke['KE_zonal']:.6e}",
+        'KE_eddy'        : f"{ke['KE_eddy']:.6e}",
+        'zonal_frac'     : f"{ke['zonal_fraction']:.4f}",
+        'RS_mean'        : f"{rs['RS_mean']:.6e}",
+        'omega_rms'      : f"{vs['omega_rms']:.6e}",
+        'omega_skew'     : f"{vs['omega_skew']:+.4f}",
+        'Qy_sign_changes': Qy_sign_changes,
+        'staircase_score': f"{staircase_score:.4f}",
+        'R_beta_star'    : f"{R_beta_star:.4f}",
     }
     for name, value in rows.items():
         path = os.path.join(cfg.DATA_DIR, f"{name}.csv")
@@ -109,23 +119,33 @@ def run_simulation():
     init_noise_fields()
     print("Initialize finish.")
 
-    #記錄台
+    #記錄台（純量時序）
     log = {
-        'step'          : [],
-        'u_rms'         : [],
-        'u_max'         : [],
-        'jet_count'     : [],
-        'E_slope'       : [],
-        # ── 新增診斷量 ──
-        'L_beta'        : [],   # Rhines 尺度 (格點)
-        'Ro_beta'       : [],   # β-Rossby 數
-        'jet_positions' : [],   # 噴流 y-index 列表
-        'KE_zonal'      : [],   # 帶狀動能
-        'KE_eddy'       : [],   # 渦流動能
-        'zonal_frac'    : [],   # KE_zonal / KE_total
-        'RS_mean'       : [],   # Reynolds stress 平均值
-        'omega_rms'     : [],   # 渦度 RMS
-        'omega_skew'    : [],   # 渦度偏態（負 → 反氣旋主導）
+        'step'            : [],
+        'u_rms'           : [],
+        'u_max'           : [],
+        'jet_count'       : [],
+        'E_slope'         : [],
+        'L_beta'          : [],   # Rhines 尺度 (格點)
+        'Ro_beta'         : [],   # β-Rossby 數
+        'jet_positions'   : [],   # 噴流 y-index 列表
+        'KE_zonal'        : [],   # 帶狀動能
+        'KE_eddy'         : [],   # 渦流動能
+        'zonal_frac'      : [],   # KE_zonal / KE_total
+        'RS_mean'         : [],   # Reynolds stress 空間平均純量
+        'omega_rms'       : [],   # 渦度 RMS
+        'omega_skew'      : [],   # 渦度偏態（負 → 反氣旋主導）
+        'Qy_sign_changes' : [],   # Q_y 符號反轉次數（正壓不穩定判準）
+        'staircase_score' : [],   # PV 階梯分數
+        'R_beta_star'     : [],   # Zonostrophy index
+    }
+
+    # 剖面歷史（每個 SAVE_EVERY 步一筆，最終儲存為 NPZ）
+    prof = {
+        'u_bar'     : [],   # (T, NY)  Hovmöller 資料
+        'RS_profile': [],   # (T, NY)  完整 Reynolds stress 剖面
+        'Qy'        : [],   # (T, NY)  位渦梯度剖面
+        'q_pv'      : [],   # (T, NY)  PV 剖面
     }
 
     #ping-pong 緩衝（避免每步整場複製）
@@ -152,17 +172,32 @@ def run_simulation():
             k_arr, E_arr = compute_energy_spectrum(ux_np, uy_np)
             slope = kolmogorov_slope(k_arr, E_arr)
 
-            # ── 新增診斷量 ──
-            L_b   = rhines_scale(u_rms)
-            Ro_b  = rossby_beta(u_rms)
-            jpos  = jet_positions(zm['u_bar'])
-            ke    = kinetic_energy_decomp(ux_np, uy_np)
+            # ── 診斷量（純量） ──
+            L_b      = rhines_scale(u_rms)
+            Ro_b     = rossby_beta(u_rms)
+            jpos     = jet_positions(zm['u_bar'])
+            ke       = kinetic_energy_decomp(ux_np, uy_np)
             omega_np = get_vorticity_numpy()
-            rs    = reynolds_stress(ux_np, uy_np)
-            vs    = vorticity_stats(omega_np)
+            rs       = reynolds_stress(ux_np, uy_np)
+            vs       = vorticity_stats(omega_np)
+
+            # ── 新增診斷量 ──
+            pv_grad  = pv_gradient(zm['u_bar'])
+            pv_st    = pv_staircase(zm['u_bar'])
+            eps_inj  = estimate_energy_injection(ke['KE_total'])
+            R_b_star = zonostrophy_index(u_rms, eps_inj)
+
+            # ── 剖面歷史（存 NPZ 用） ──
+            prof['u_bar'].append(zm['u_bar'].astype(np.float32))
+            prof['RS_profile'].append(rs['RS_profile'].astype(np.float32))
+            prof['Qy'].append(pv_grad['Qy'])
+            prof['q_pv'].append(pv_st['q_profile'])
 
             _append_metric_csvs(step, u_rms, u_max, jets, slope,
-                                L_b, Ro_b, jpos, ke, rs, vs)
+                                L_b, Ro_b, jpos, ke, rs, vs,
+                                pv_grad['Qy_sign_changes'],
+                                pv_st['staircase_score'],
+                                R_b_star)
 
             log['step'].append(step)
             log['u_rms'].append(u_rms)
@@ -178,6 +213,9 @@ def run_simulation():
             log['RS_mean'].append(rs['RS_mean'])
             log['omega_rms'].append(vs['omega_rms'])
             log['omega_skew'].append(vs['omega_skew'])
+            log['Qy_sign_changes'].append(pv_grad['Qy_sign_changes'])
+            log['staircase_score'].append(pv_st['staircase_score'])
+            log['R_beta_star'].append(R_b_star)
 
             if u_max > 0.3:
                 print(f"⚠️ WARNING: Maximum velocity u_max = {u_max:.5f} exceeds the stability limit 0.3!")
@@ -197,6 +235,7 @@ def run_simulation():
                     save_path=f"output/frames/spectrum_{step:08d}.png")
     
     _save_summary(log)
+    _save_profiles(prof, log['step'])
     _make_videos()
 
 
@@ -226,10 +265,11 @@ def _save_summary(log: dict):
     if len(steps) == 0:
         return
 
-    # ── summary.png：2×3 全診斷量一圖 ──
-    fig, axes = plt.subplots(2, 3, figsize=(18, 8))
+    # ── summary.png：3×3 全診斷量一圖 ──
+    fig, axes = plt.subplots(3, 3, figsize=(18, 12))
     fig.suptitle("Jupiter LBM — Simulation Summary", fontsize=14)
 
+    # Row 0
     axes[0, 0].plot(steps, log['u_rms'], color='steelblue')
     axes[0, 0].set_title("RMS Velocity")
     axes[0, 0].set_ylabel("|u|_rms")
@@ -248,6 +288,7 @@ def _save_summary(log: dict):
     axes[0, 2].legend(fontsize=8)
     axes[0, 2].grid(True, linestyle='--', alpha=0.5)
 
+    # Row 1
     axes[1, 0].plot(steps, log['zonal_frac'], color='purple')
     axes[1, 0].axhline(0.6, color='k', linestyle='--', linewidth=0.8, label='Jupiter ~60%')
     axes[1, 0].set_title("Zonal KE Fraction")
@@ -276,6 +317,28 @@ def _save_summary(log: dict):
     axes[1, 2].legend(fontsize=7)
     axes[1, 2].grid(True, linestyle='--', alpha=0.5)
 
+    # Row 2 — 新增診斷純量
+    axes[2, 0].plot(steps, log['R_beta_star'], color='teal')
+    axes[2, 0].axhline(2.5, color='g', linestyle='--', linewidth=0.8, label='R_β*=2.5 (zonostrophic)')
+    axes[2, 0].axhline(1.5, color='r', linestyle='--', linewidth=0.8, label='R_β*=1.5 (friction-dom)')
+    axes[2, 0].set_title("Zonostrophy Index  R_β*")
+    axes[2, 0].set_ylabel("R_β* = L_R / L_t")
+    axes[2, 0].legend(fontsize=7)
+    axes[2, 0].grid(True, linestyle='--', alpha=0.5)
+
+    axes[2, 1].plot(steps, log['Qy_sign_changes'], color='sienna', drawstyle='steps-mid')
+    axes[2, 1].axhline(0, color='k', linewidth=0.8, linestyle='--')
+    axes[2, 1].set_title("Rayleigh–Kuo: Q_y Sign Changes")
+    axes[2, 1].set_ylabel("# sign reversals  (>0 = unstable)")
+    axes[2, 1].grid(True, linestyle='--', alpha=0.5)
+
+    axes[2, 2].plot(steps, log['staircase_score'], color='darkviolet')
+    axes[2, 2].axhline(5.0, color='g', linestyle='--', linewidth=0.8, label='score=5 (staircase-like)')
+    axes[2, 2].set_title("PV Staircase Score")
+    axes[2, 2].set_ylabel("max|dq/dy| / mean|dq/dy|")
+    axes[2, 2].legend(fontsize=8)
+    axes[2, 2].grid(True, linestyle='--', alpha=0.5)
+
     for ax in axes.flat:
         ax.set_xlabel("Step")
     plt.tight_layout()
@@ -289,7 +352,8 @@ def _save_summary(log: dict):
     columns = ['step', 'u_rms', 'u_max', 'jet_count', 'E_slope',
                'L_beta', 'Ro_beta', 'jet_positions',
                'KE_zonal', 'KE_eddy', 'zonal_frac',
-               'RS_mean', 'omega_rms', 'omega_skew']
+               'RS_mean', 'omega_rms', 'omega_skew',
+               'Qy_sign_changes', 'staircase_score', 'R_beta_star']
     with open(csv_path, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow(columns)
@@ -302,15 +366,132 @@ def _save_summary(log: dict):
                 f"{log['E_slope'][i]:.4f}",
                 f"{log['L_beta'][i]:.4f}",
                 f"{log['Ro_beta'][i]:.6e}",
-                '|'.join(map(str, log['jet_positions'][i])),  # e.g. "12|45|89"
+                '|'.join(map(str, log['jet_positions'][i])),
                 f"{log['KE_zonal'][i]:.6e}",
                 f"{log['KE_eddy'][i]:.6e}",
                 f"{log['zonal_frac'][i]:.4f}",
                 f"{log['RS_mean'][i]:.6e}",
                 f"{log['omega_rms'][i]:.6e}",
                 f"{log['omega_skew'][i]:+.4f}",
+                log['Qy_sign_changes'][i],
+                f"{log['staircase_score'][i]:.4f}",
+                f"{log['R_beta_star'][i]:.4f}",
             ])
     print(f"  → log.csv saved  ({len(steps)} rows × {len(columns)} cols)")
+
+def _jet_autocorr(u_bar_hist: np.ndarray, steps: list) -> np.ndarray:
+    """
+    對 Hovmöller 資料 u_bar_hist (T, NY) 的每個緯度做時間自相關，
+    回傳 e-folding 自相關時間 tau(y)，單位：模擬步數。
+    """
+    T, NY = u_bar_hist.shape
+    if T < 3:
+        return np.zeros(NY)
+    dt = (steps[-1] - steps[0]) / max(T - 1, 1)
+    tau = np.full(NY, float(steps[-1]))
+    n_pad = 2 ** int(np.ceil(np.log2(2 * T)))   # FFT 補零長度
+
+    for y in range(NY):
+        sig = u_bar_hist[:, y].astype(np.float64)
+        sig -= sig.mean()
+        if sig.std() < 1e-12:
+            continue
+        F   = np.fft.rfft(sig, n=n_pad)
+        acf = np.fft.irfft(F * np.conj(F))[:T]
+        if acf[0] == 0:
+            continue
+        acf /= acf[0]
+        for lag in range(1, T):
+            if acf[lag] < 1.0 / np.e:
+                tau[y] = lag * dt
+                break
+    return tau
+
+
+def _save_profiles(prof: dict, steps: list):
+    """
+    儲存剖面歷史資料（NPZ）及衍生圖：
+      hovmoller.npz  / hovmoller.png  — ū(y, t) Hovmöller 圖
+      rs_profile.npz                  — 完整 Reynolds stress 剖面
+      qy_profile.npz                  — Q_y 位渦梯度剖面
+      pv_profile.npz                  — PV 剖面
+      jet_autocorr.png                — 各緯度自相關時間 vs 渦流翻轉時間
+    """
+    if len(steps) == 0:
+        return
+
+    steps_arr = np.array(steps, dtype=np.int32)
+    y_arr     = np.arange(cfg.NY, dtype=np.float32)
+
+    # ── 轉換成 2D 陣列 ──
+    u_bar_hist = np.stack(prof['u_bar'],      axis=0)   # (T, NY)
+    rs_hist    = np.stack(prof['RS_profile'], axis=0)
+    qy_hist    = np.stack(prof['Qy'],         axis=0)
+    q_hist     = np.stack(prof['q_pv'],       axis=0)
+
+    # ── 存 NPZ ──
+    np.savez_compressed(os.path.join(cfg.DATA_DIR, 'hovmoller.npz'),
+                        u_bar=u_bar_hist, steps=steps_arr, y=y_arr)
+    np.savez_compressed(os.path.join(cfg.DATA_DIR, 'rs_profile.npz'),
+                        RS_profile=rs_hist, steps=steps_arr, y=y_arr)
+    np.savez_compressed(os.path.join(cfg.DATA_DIR, 'qy_profile.npz'),
+                        Qy=qy_hist, steps=steps_arr, y=y_arr)
+    np.savez_compressed(os.path.join(cfg.DATA_DIR, 'pv_profile.npz'),
+                        q_pv=q_hist, steps=steps_arr, y=y_arr)
+    print(f"  → 4 個剖面 NPZ 已儲存 ({cfg.DATA_DIR}/)")
+
+    # ── Hovmöller 圖 ──
+    fig, ax = plt.subplots(figsize=(12, 6))
+    vmax = float(np.percentile(np.abs(u_bar_hist), 98))
+    vmax = max(vmax, 1e-6)
+    im = ax.pcolormesh(steps_arr, y_arr, u_bar_hist.T,
+                       cmap='RdBu_r', vmin=-vmax, vmax=vmax, shading='nearest')
+    plt.colorbar(im, ax=ax, label='ū  (lattice units)')
+    ax.set_xlabel("Step")
+    ax.set_ylabel("y  (lattice index / latitude)")
+    ax.set_title("Hovmöller Diagram  ū(y, t)")
+    plt.tight_layout()
+    fig.savefig(os.path.join(cfg.OUTPUT_DIR, "hovmoller.png"), dpi=200)
+    plt.close(fig)
+    print(f"  → hovmoller.png saved.")
+
+    # ── 噴流自相關時間圖 ──
+    tau = _jet_autocorr(u_bar_hist, steps)
+
+    # 渦流翻轉時間估算：τ_eddy ≈ L_β / U_rms_mean
+    u_rms_mean = float(np.sqrt(np.mean(u_bar_hist**2))) or 1e-9
+    L_b_mean   = float(np.sqrt(u_rms_mean / cfg.BETA)) if cfg.BETA > 0 else 0.0
+    tau_eddy   = L_b_mean / u_rms_mean if u_rms_mean > 0 else 0.0
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig.suptitle("Jet Autocorrelation vs Eddy Turnover Time", fontsize=13)
+
+    axes[0].plot(tau, y_arr, color='steelblue', linewidth=1.2)
+    if tau_eddy > 0:
+        axes[0].axvline(tau_eddy, color='r', linestyle='--', linewidth=1.0,
+                        label=f'τ_eddy ≈ {tau_eddy:.0f} steps')
+        axes[0].legend(fontsize=8)
+    axes[0].set_xlabel("Autocorrelation e-folding time (steps)")
+    axes[0].set_ylabel("y (lattice)")
+    axes[0].set_title("τ_corr(y)")
+    axes[0].grid(True, linestyle='--', alpha=0.4)
+
+    # τ_corr / τ_eddy ratio（> 1 → 噴流比渦流翻轉更持久）
+    if tau_eddy > 0:
+        ratio = tau / tau_eddy
+        axes[1].plot(ratio, y_arr, color='darkorange', linewidth=1.2)
+        axes[1].axvline(1.0, color='k', linestyle='--', linewidth=0.8, label='ratio = 1')
+        axes[1].set_xlabel("τ_corr / τ_eddy")
+        axes[1].set_title("Jet Persistence Ratio  (>1 = jet survives eddy turnover)")
+        axes[1].legend(fontsize=8)
+        axes[1].grid(True, linestyle='--', alpha=0.4)
+        axes[1].set_ylabel("y (lattice)")
+
+    plt.tight_layout()
+    fig.savefig(os.path.join(cfg.OUTPUT_DIR, "jet_autocorr.png"), dpi=200)
+    plt.close(fig)
+    print(f"  → jet_autocorr.png saved.")
+
 
 if __name__ == "__main__":
     run_simulation()

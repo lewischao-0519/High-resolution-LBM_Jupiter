@@ -1,12 +1,15 @@
 # analysis/diagnostics.py  ── 延伸診斷量（對比木星觀測數據）
 #
-# 新增量：
+# 診斷量：
 #   1. Rhines 尺度  L_β = sqrt(U_rms / β)
 #   2. 噴流位置時序（y index of each jet peak）
 #   3. 帶狀動能 KE_zonal vs 渦流動能 KE_eddy
-#   4. Reynolds stress  <u'v'>_x  (y profile + domain mean)
+#   4. Reynolds stress  <u'v'>_x  (完整 y 剖面 + 平均純量)
 #   5. 渦度 RMS 與偏態 (skewness)  — 木星應為負偏（反氣旋主導）
 #   6. β-Rossby 數  Ro_β = U_rms / (β * L_β²)
+#   7. Rayleigh–Kuo 正壓不穩定判據  Q_y = β − ∂²ū/∂y²
+#   8. PV staircase 結構  （階梯分數 = max|dq/dy| / mean|dq/dy|）
+#   9. Zonostrophy index  R_β* = L_R / L_t
 #
 import numpy as np
 import sys, os
@@ -162,3 +165,101 @@ def vorticity_stats(omega_np: np.ndarray) -> dict:
         'omega_rms' : rms,
         'omega_skew': skew,
     }
+
+
+# ──────────────────────────────────────────────
+# 7. Rayleigh–Kuo 正壓不穩定判據
+# ──────────────────────────────────────────────
+def pv_gradient(u_bar: np.ndarray) -> dict:
+    """
+    位渦梯度 Q_y(y) = β − ∂²ū/∂y²
+
+    Q_y 在 y 方向變號 → 正壓不穩定的必要條件（Rayleigh–Kuo）。
+    如果噴流剖面頻繁出現 Q_y 變號，代表剪切力不穩定有嚴謹理論依據。
+
+    Returns dict:
+      Qy            : (NY,) 位渦梯度剖面
+      Qy_sign_changes : 沿 y 軸的符號反轉次數（整數）
+      d2u_bar       : (NY,) ∂²ū/∂y²（格點單位，間距=1）
+    """
+    d2u = np.zeros_like(u_bar, dtype=np.float64)
+    d2u[1:-1] = u_bar[2:] - 2.0 * u_bar[1:-1] + u_bar[:-2]
+    d2u[0]    = d2u[1]
+    d2u[-1]   = d2u[-2]
+
+    Qy = cfg.BETA - d2u
+
+    # 計算符號反轉次數（忽略 Qy ≈ 0 的點）
+    s = np.sign(Qy)
+    s_nz = s[s != 0]
+    sign_changes = int(np.sum(np.abs(np.diff(s_nz)) > 0)) if len(s_nz) > 1 else 0
+
+    return {
+        'Qy'              : Qy.astype(np.float32),
+        'Qy_sign_changes' : sign_changes,
+        'd2u_bar'         : d2u.astype(np.float32),
+    }
+
+
+# ──────────────────────────────────────────────
+# 8. PV 梯度 staircase 結構
+# ──────────────────────────────────────────────
+def pv_staircase(u_bar: np.ndarray) -> dict:
+    """
+    PV 剖面  q(y) ≈ β·y − dū/dy （積分常數已去掉）。
+
+    staircase_score = max|dq/dy| / mean|dq/dy|
+      ~1   → 平滑漸變（混合過於均勻，屏障弱）
+      >>1  → 尖銳跳躍（PV 階梯，強輸送屏障）
+    穩定木星噴流對應的 staircase_score 通常 >> 5。
+
+    Returns dict:
+      q_profile       : (NY,) PV 剖面
+      staircase_score : 純量
+      max_dq, mean_dq : PV 梯度極值與平均值
+    """
+    y  = np.arange(len(u_bar), dtype=np.float64)
+    du = np.gradient(u_bar.astype(np.float64))
+    q  = cfg.BETA * y - du
+
+    dq      = np.abs(np.gradient(q))
+    mean_dq = float(np.mean(dq))
+    max_dq  = float(np.max(dq))
+    score   = max_dq / mean_dq if mean_dq > 1e-12 else 0.0
+
+    return {
+        'q_profile'      : q.astype(np.float32),
+        'staircase_score': float(score),
+        'max_dq'         : max_dq,
+        'mean_dq'        : mean_dq,
+    }
+
+
+# ──────────────────────────────────────────────
+# 9. Zonostrophy index  R_β*
+# ──────────────────────────────────────────────
+def estimate_energy_injection(ke_total: float) -> float:
+    """
+    在強迫–耗散穩態下能量守恆：注入率 ε ≈ 耗散率 = EPSILON · KE_total。
+    這是可直接量測的代理量，不依賴難以校正的強迫振幅。
+    單位：（格點速度）²/步。
+    """
+    return float(cfg.EPSILON * ke_total)
+
+
+def zonostrophy_index(u_rms: float, epsilon: float) -> float:
+    """
+    R_β* = L_R / L_t
+
+      L_R = sqrt(2 · u_rms / β)      ── Rhines 尺度（格點）
+      L_t = (ε / β³)^{1/5}           ── 渦流翻轉時間 = Rossby 波週期的過渡尺度
+
+    判斷依據（Sukoriansky et al. 2007）：
+      R_β* ≳ 2.5 → zonostrophic regime（帶狀流穩定主導）
+      R_β* ≲ 1.5 → 摩擦主導（噴流無法站穩）
+    """
+    if cfg.BETA <= 0 or epsilon <= 0 or u_rms <= 0:
+        return 0.0
+    L_R = float(np.sqrt(2.0 * u_rms / cfg.BETA))
+    L_t = float((epsilon / cfg.BETA**3) ** 0.2)
+    return L_R / L_t if L_t > 0 else 0.0
