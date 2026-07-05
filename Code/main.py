@@ -50,10 +50,59 @@ def setup_output_dirs():
         os.makedirs(d, exist_ok=True)
     print("🪐 Jupiter LBM Simulation — initializing...")
 
+# 各診斷量 CSV 的欄位定義
+_METRIC_HEADERS = [
+    ('u_rms',         ['step', 'u_rms']),
+    ('u_max',         ['step', 'u_max']),
+    ('jet_count',     ['step', 'jet_count']),
+    ('E_slope',       ['step', 'E_slope']),
+    ('L_beta',        ['step', 'L_beta']),
+    ('Ro_beta',       ['step', 'Ro_beta']),
+    ('jet_positions', ['step', 'jet_positions']),
+    ('KE_zonal',      ['step', 'KE_zonal']),
+    ('KE_eddy',       ['step', 'KE_eddy']),
+    ('zonal_frac',    ['step', 'zonal_frac']),
+    ('RS_mean',       ['step', 'RS_mean']),
+    ('omega_rms',     ['step', 'omega_rms']),
+    ('omega_skew',    ['step', 'omega_skew']),
+]
+
+def _init_metric_csvs():
+    """清除舊資料並為各診斷量建立帶標題的 CSV 檔案。"""
+    for name, header in _METRIC_HEADERS:
+        path = os.path.join(cfg.DATA_DIR, f"{name}.csv")
+        with open(path, 'w', newline='', encoding='utf-8') as fh:
+            csv.writer(fh).writerow(header)
+    print(f"  → {len(_METRIC_HEADERS)} 個診斷量 CSV 已初始化 ({cfg.DATA_DIR}/)")
+
+def _append_metric_csvs(step: int, u_rms, u_max, jet_count, E_slope,
+                         L_b, Ro_b, jpos, ke, rs, vs):
+    """將本步診斷量逐一追加到各自的 CSV 檔案。"""
+    rows = {
+        'u_rms'        : f"{u_rms:.6f}",
+        'u_max'        : f"{u_max:.6f}",
+        'jet_count'    : jet_count,
+        'E_slope'      : f"{E_slope:.4f}",
+        'L_beta'       : f"{L_b:.4f}",
+        'Ro_beta'      : f"{Ro_b:.6e}",
+        'jet_positions': '|'.join(map(str, jpos)),
+        'KE_zonal'     : f"{ke['KE_zonal']:.6e}",
+        'KE_eddy'      : f"{ke['KE_eddy']:.6e}",
+        'zonal_frac'   : f"{ke['zonal_fraction']:.4f}",
+        'RS_mean'      : f"{rs['RS_mean']:.6e}",
+        'omega_rms'    : f"{vs['omega_rms']:.6e}",
+        'omega_skew'   : f"{vs['omega_skew']:+.4f}",
+    }
+    for name, value in rows.items():
+        path = os.path.join(cfg.DATA_DIR, f"{name}.csv")
+        with open(path, 'a', newline='', encoding='utf-8') as fh:
+            csv.writer(fh).writerow([step, value])
+
 #主程式
 def run_simulation():
     #工具初始化
-    setup_output_dirs()    
+    setup_output_dirs()
+    _init_metric_csvs()
     init_constants()
     init_fields()
     init_mrt_matrices()
@@ -111,6 +160,9 @@ def run_simulation():
             omega_np = get_vorticity_numpy()
             rs    = reynolds_stress(ux_np, uy_np)
             vs    = vorticity_stats(omega_np)
+
+            _append_metric_csvs(step, u_rms, u_max, jets, slope,
+                                L_b, Ro_b, jpos, ke, rs, vs)
 
             log['step'].append(step)
             log['u_rms'].append(u_rms)
