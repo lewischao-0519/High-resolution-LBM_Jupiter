@@ -1,16 +1,4 @@
-# main.py  ── Jupiter LBM 主程式
-# 對應 PDF §8 研究時程與 §11 程式架構
-#
-# 資料流：
-#   config.py
-#     └─ core/collision.py  (f, rho, ux, uy fields)
-#          ├─ core/forcing.py  → Fx, Fy fields
-#          │    ├─ physics/coriolis.py
-#          │    └─ physics/thermal.py  (T_field)
-#          └─ bgk_collision_kernel(omega)
-#     └─ analysis/ (vorticity, spectrum, zonal_mean)
-#     └─ utils/   (plotting)
-#
+#外掛工具
 import os, sys
 import numpy as np
 import matplotlib
@@ -18,156 +6,105 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
-# ── 設定 Python path ──
+#儲存路徑
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
 
+#核心模組
 import config as cfg
 from config import init_constants
-
-# ── 核心模組 ──
+from core.lattice import feq_single,init_mrt_matrices
 from core.collision import (
     f, f_new,
     rho_field, ux_field, uy_field,
     Fx_field, Fy_field,
-    init_fields, bgk_collision_kernel,apply_boundary_y_free_slip, swap_fields,
-    compute_macro,apply_periodic_bc_y
+    swap_fields,mrt_collision_kernel,init_fields,
 )
-from core.forcing import update_forcing_kernel, apply_noise_perturbation
-
-# ── 物理模組 ──
-from physics.thermal import (
-    T_field,
-    init_temperature,
-    advect_temperature_kernel,
-    relax_temperature_kernel
+from core.forcing import (
+    #apply_coriolis_drag_update_f,
+    update_zonal_noise,
+    #apply_zonal_ar1_forcing,
+    init_noise_fields
 )
-from physics.nondimensional import print_dimensionless_summary
-
-# ── 分析模組 ──
+#分析模組
 from analysis.vorticity  import get_vorticity_numpy
 from analysis.spectrum   import compute_energy_spectrum, kolmogorov_slope
 from analysis.zonal_mean import compute_zonal_mean, count_jet_streams
 
-# ── 視覺化工具 ──
+#視覺化工具
 from utils.plotting import (
     plot_velocity_magnitude,
     plot_vorticity,
     plot_zonal_profile,
     plot_energy_spectrum
 )
-FORCING_AMP = 5e-7   # 起始值，后续可调
-FORCING_INTERVAL = 10
 
-
+#創建資料夾
 def setup_output_dirs():
-    """建立輸出資料夾"""
     for d in [cfg.OUTPUT_DIR, cfg.DATA_DIR, "output/frames"]:
         os.makedirs(d, exist_ok=True)
-
-
-def run_simulation():
-    # ── 1. 初始化 ──
     print("🪐 Jupiter LBM Simulation — initializing...")
+
+#主程式
+def run_simulation():
+    #工具初始化
+    setup_output_dirs()    
     init_constants()
     init_fields()
-    init_temperature()
-    setup_output_dirs()
+    init_mrt_matrices()
+    init_noise_fields()
+    print("Initialize finish.")
 
-    print_dimensionless_summary()
+    #記錄台
+    log = {'step': [], 'u_rms': [], 'u_max': [], 'jet_count': [], 'E_slope': [], 'T_std': []}
 
-    # ── 2. 資料記錄器 ──
-    log = {
-        'step'        : [],
-        'u_rms'       : [],
-        'jet_count'   : [],
-        'E_slope'     : [],
-        'T_std'       : [],
-    }
-    # 用於計算渦流通量的歷史資料（保留最近 10 幀）
-    velocity_history = []
-
-    # ── 影片設定（已禁用，仅保存静态图）──
-    print(f"🚀 Starting main loop  (MAX_STEPS={cfg.MAX_STEPS}) ... (video disabled)")
-    
-    for step in range(cfg.MAX_STEPS):
-        # ── A. 更新外力場（Coriolis + 熱力）──
-        update_forcing_kernel(cfg.F0, cfg.BETA, cfg.ALPHA_T)
-
-        # ── B. 早期噪音擾動（觸發不穩定性）──
-        #apply_noise_perturbation(step)
-        
-        # ---- 定期加入随机小尺度强迫（模拟对流能量注入） ----
-        #if step % cfg.FORCING_INTERVAL == 0:
-        #    # 生成随机噪声场（幅度均匀分布）
-        #    rng = np.random.default_rng(step)
-        #    fx_noise = rng.uniform(-cfg.FORCING_AMP, cfg.FORCING_AMP,
-        #                        size=(cfg.NY, cfg.NX)).astype(np.float32)
-        #    fy_noise = rng.uniform(-cfg.FORCING_AMP, cfg.FORCING_AMP,
-        #                        size=(cfg.NY, cfg.NX)).astype(np.float32)
-        #    # 加到外力场上（注意：F 场已由 update_forcing_kernel 更新）
-        #    Fx_field.from_numpy(Fx_field.to_numpy() + fx_noise)
-        #    Fy_field.from_numpy(Fy_field.to_numpy() + fy_noise)
-
-        # ── C. BGK 碰撞 + 串流（Loop Fusion）──
-        bgk_collision_kernel(cfg.OMEGA)
-        apply_boundary_y_free_slip() 
+    #運行迴圈
+    for step in range(cfg.MAX_STEPS+1):
+        #模擬
+        if step >= (cfg.WARMUP_STEPS) and step % 100 == 0:
+            update_zonal_noise(cfg.alpha, cfg.sigma)          #仍先更新AR(1)噪音
+        #純LBM+外力（streaming+MRT+forcing）
+        mrt_collision_kernel(cfg.OMEGA,cfg.s1,cfg.s2,cfg.s4,cfg.s6,cfg.F0,cfg.BETA,cfg.EPSILON)   #已包含科氏力、阻尼、噪音
         swap_fields()
-        compute_macro()
 
-        # 注意：已删除 apply_periodic_bc_y()（多余的）
-
-        # ── D. 溫度場演化（每步）──
-        #advect_temperature_kernel(1.0)
-        #relax_temperature_kernel(cfg.T0, cfg.DELTA_T, 5e-5)
-
-        # ── E. 每 SAVE_EVERY 步做記錄與保存靜態圖 ──
+        #紀錄
         if step % cfg.SAVE_EVERY == 0:
             ux_np = ux_field.to_numpy()
             uy_np = uy_field.to_numpy()
-
-            # 基本統計
-            u_rms  = float(np.sqrt((ux_np**2 + uy_np**2).mean()))
-            zm     = compute_zonal_mean()
-            jets   = count_jet_streams(zm['u_bar'])
-
-            # 能量譜
+            u_mag = np.sqrt(ux_np**2 + uy_np**2)
+            u_rms = float(u_mag.mean())
+            u_max = float(u_mag.max())
+            zm    = compute_zonal_mean()
+            jets  = count_jet_streams(zm['u_bar'])
             k_arr, E_arr = compute_energy_spectrum(ux_np, uy_np)
-            slope        = kolmogorov_slope(k_arr, E_arr)
+            slope = kolmogorov_slope(k_arr, E_arr)
 
-            # 溫度統計
-            T_std = float(T_field.to_numpy().std())
-
-            # 記錄
             log['step'].append(step)
             log['u_rms'].append(u_rms)
+            log['u_max'].append(u_max)
             log['jet_count'].append(jets)
             log['E_slope'].append(slope if not np.isnan(slope) else 0.0)
-            log['T_std'].append(T_std)
 
-            # 渦度
+            if u_max > 0.3:
+                print(f"⚠️ WARNING: Maximum velocity u_max = {u_max:.5f} exceeds the stability limit 0.3!")
+
             omega_np = get_vorticity_numpy()
+            plot_velocity_magnitude(ux_np, uy_np, step,
+                save_path=f"output/frames/vel_{step:06d}.jpg")
+            plot_vorticity(omega_np, step,
+                save_path=f"output/frames/vort_{step:06d}.jpg")
+            print(f"Step {step:6d} | U_rms={u_rms:.5f} | U_max={u_max:.5f} | Jets={jets} | "
+                  f"E_slope={slope:.2f} | AR={'ON' if step>=(cfg.WARMUP_STEPS) else 'OFF'}")
 
-            # 保存靜態圖
-            u_mag = np.sqrt(ux_np**2 + uy_np**2)
-            plot_velocity_magnitude(ux_np, uy_np, step, save_path=f"output/frames/vel_{step:06d}.jpg")
-            plot_vorticity(omega_np, step, save_path=f"output/frames/vort_{step:06d}.jpg")
-            if step % cfg.SAVE_EVERY == 0:
-                ux_np = ux_field.to_numpy()
-                uy_np = uy_field.to_numpy()
-                u_mag = np.sqrt(ux_np**2 + uy_np**2)
-                print(f"Step {step}: |u| min={u_mag.min():.2e}, max={u_mag.max():.2e}")
-            # 每 20000 步保存剖面和能譜圖
-            if step % 20000 == 0:
-                plot_zonal_profile(zm['y'], zm['u_bar'], step, save_path=f"output/frames/zonal_{step:06d}.png")
-                plot_energy_spectrum(k_arr, E_arr, step, slope=slope, save_path=f"output/frames/spectrum_{step:06d}.png")
-                print(f"  Step {step:6d} | U_rms={u_rms:.5f} | Jets={jets} | E_slope={slope:.2f} | T_std={T_std:.4f}")
-
-    print("✅ Simulation done! Generating summary plots...")
+            if step % cfg.SAVE_SPECTRUM == 0:
+                plot_zonal_profile(zm['y'], zm['u_bar'], step,
+                    save_path=f"output/frames/zonal_{step:06d}.png")
+                plot_energy_spectrum(k_arr, E_arr, step, slope=slope,
+                    save_path=f"output/frames/spectrum_{step:06d}.png")
+    
     _save_summary(log)
-    print(f"📁 All outputs saved to '{cfg.OUTPUT_DIR}/'")
-
-
+        
+#記錄總結
 def _save_summary(log: dict):
     """儲存最終時間序列摘要圖"""
     steps = log['step']
@@ -195,10 +132,6 @@ def _save_summary(log: dict):
     axes[1, 0].legend(fontsize=8)
     axes[1, 0].grid(True, linestyle='--', alpha=0.5)
 
-    axes[1, 1].plot(steps, log['T_std'], color='purple')
-    axes[1, 1].set_title("Temperature Std Dev")
-    axes[1, 1].set_ylabel("std(T)")
-    axes[1, 1].grid(True, linestyle='--', alpha=0.5)
 
     for ax in axes.flat:
         ax.set_xlabel("Step")
@@ -210,7 +143,6 @@ def _save_summary(log: dict):
     # 儲存數值資料
     np.save(os.path.join(cfg.DATA_DIR, "log.npy"), log)
     print(f"  → summary.png and log.npy saved.")
-
 
 if __name__ == "__main__":
     run_simulation()

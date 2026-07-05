@@ -1,23 +1,18 @@
-# config.py  ── Jupiter LBM 主設定檔
-# 對應 PDF §2 研究目的、§3 控制方程、§7 參數掃描設計
-#
+#外掛程式
 import numpy as np
 import taichi as ti
 
-# --- 後端選擇 ---
+#後端選擇
 ti.init(arch=ti.gpu, default_fp=ti.f32)
 
-# ══════════════════════════════════════════════════════
-#  網格基本參數
-# ══════════════════════════════════════════════════════
-NX        = 512          # x 方向格點數（緯向）
-NY        = 256          # y 方向格點數（徑向 / 緯度方向）
-MAX_STEPS = 300000         # 總演化步數
-SAVE_EVERY = 5000          # 每幾步存一幀
+#網格基本參數
+NX        = 512           # x 方向格點數（緯向）
+NY        = 256           # y 方向格點數（徑向 / 緯度方向）
+MAX_STEPS = 700000        # 總演化步數
+SAVE_EVERY = 5000         # 每幾步存一幀
+SAVE_SPECTRUM = 4*SAVE_EVERY    # 每幾步存數據
 
-# ══════════════════════════════════════════════════════
-#  D2Q9 離散速度（NumPy 版供初始化用）
-# ════════════════════════════════════════════════════
+#D2Q9離散速度
 CX_NP  = np.array([ 0, 1, 0,-1, 0, 1,-1,-1, 1], dtype=np.int32)
 CY_NP  = np.array([ 0, 0, 1, 0,-1, 1, 1,-1,-1], dtype=np.int32)
 W_NP   = np.array(
@@ -26,48 +21,46 @@ W_NP   = np.array(
 )
 OPP_NP = np.array([ 0, 3, 4, 1, 2, 7, 8, 5, 6], dtype=np.int32)
 
-# --- Taichi fields（GPU 常駐）---
+#Taichi
 CX  = ti.field(ti.i32,  shape=9)
 CY  = ti.field(ti.i32,  shape=9)
 W   = ti.field(ti.f32,  shape=9)
 OPP = ti.field(ti.i32,  shape=9)
 
+#參數初始化，將陣列上傳至Taichi
 def init_constants():
-    """將 NumPy 陣列上傳至 Taichi fields"""
     CX.from_numpy(CX_NP)
     CY.from_numpy(CY_NP)
     W.from_numpy(W_NP)
     OPP.from_numpy(OPP_NP)
 
-# ══════════════════════════════════════════════════════
-#  物理參數（對應 PDF §3 控制方程 & §7 參數掃描）
-# ══════════════════════════════════════════════════════
+#物理參數
+#β-plane模型科氏力參數
+F0 = 2e-4                #科氏力參數基準值（根據模擬緯度調整）
+BETA = 8e-5              #科氏力梯度
 
-# --- LBM 流體參數 ---
-U_MAX   = 0.1            # 特徵速度（格單位）
-NU      = 0.0015         # 運動黏滯係數 ν（掃描範圍 0.001–0.01）
-TAU     = 3.0 * NU + 0.5 # 鬆弛時間 τ（掃描範圍 0.6–1.2）
-OMEGA   = float(1.0 / TAU)
+#Reighly drag
+EPSILON = 3e-5           #摩擦係數
 
-# --- Coriolis / β-plane（對應 PDF §3, Eq.2: f(y)=f0+βy）---
-F0      = 0            # 基礎 Coriolis 參數 f0
-BETA    = 1e-4         # β 梯度（掃描範圍 1e-5–1e-3）
-# y 方向中央為赤道（y=NY//2），往極地遞增 Coriolis
-# 實際 f(y) 在 forcing.py 的 kernel 裡計算
+#海綿層參數
+SPONGE_FRAC = 0.15        #海綿層厚度占總高度的比例
+EPSILON_MAX = 7e-5       #海綿層最大阻尼（外側）
 
-# --- 熱力參數（對應 PDF §5, Eq.4-5: T(y)=T0-ΔT*y^2）---
-T0          = 1.0         # 參考溫度（格單位）
-DELTA_T     = 0.05        # 溫差強度 ΔT（掃描範圍 0.01–0.1）
-ALPHA_T     = 0.0         # 熱膨脹係數 α（熱力加速度強度）
+# AR參數
+Tc = 400.0                    #時間尺度
+alpha = np.exp(-1.0 / Tc)     #自相關係數
+sigma = 1e-6                  #振幅
+WARMUP_STEPS = 100000 
 
-# --- 隨機噪音（對應 PDF §7, ε）---
-NOISE_AMP   = 1e-4        # 噪音強度 ε（掃描範圍 1e-4–1e-2）
+#MRT矩陣參數
+s1, s2, s4, s6 = 1.2, 1.2, 1.8, 1.8
 
-# 随机强迫参数（新增）
-FORCING_AMP = 6e-4   # 持续外力幅度，可能需要微调
-FORCING_INTERVAL = 10  # 每多少步加一次随机力
-# ══════════════════════════════════════════════════════
-#  輸出目錄
-# ══════════════════════════════════════════════════════
+#LBM流體參數
+U_MAX   = 0.07                 # 特徵速度
+NU      = 0.0002               # 運動黏滯係數 (調大以符合 k^-3 斜率)
+TAU     = 3.0 * NU + 0.5       # 鬆弛時間（現已被MRT取代，但保留以供參考）
+OMEGA   = float(1.0 / TAU)     # 單純BGK鬆弛頻率（現已被MRT取代）
+
+#輸出目錄
 OUTPUT_DIR    = "output"
 DATA_DIR      = "data/processed"
