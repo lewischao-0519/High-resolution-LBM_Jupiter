@@ -68,9 +68,10 @@ _METRIC_HEADERS = [
     ('omega_rms',        ['step', 'omega_rms']),
     ('omega_skew',       ['step', 'omega_skew']),
     # ── 新增診斷純量 ──
-    ('Qy_sign_changes',  ['step', 'Qy_sign_changes']),
-    ('staircase_score',  ['step', 'staircase_score']),
-    ('R_beta_star',      ['step', 'R_beta_star']),
+    ('Qy_sign_changes',    ['step', 'Qy_sign_changes']),
+    ('staircase_score',    ['step', 'staircase_score']),
+    ('R_beta_star',        ['step', 'R_beta_star']),
+    ('epsilon_injection',  ['step', 'epsilon_injection']),
 ]
 
 def _init_metric_csvs():
@@ -83,25 +84,26 @@ def _init_metric_csvs():
 
 def _append_metric_csvs(step: int, u_rms, u_max, jet_count, E_slope,
                          L_b, Ro_b, jpos, ke, rs, vs,
-                         Qy_sign_changes, staircase_score, R_beta_star):
+                         Qy_sign_changes, staircase_score, R_beta_star, eps_inj):
     """將本步診斷量逐一追加到各自的 CSV 檔案。"""
     rows = {
-        'u_rms'          : f"{u_rms:.6f}",
-        'u_max'          : f"{u_max:.6f}",
-        'jet_count'      : jet_count,
-        'E_slope'        : f"{E_slope:.4f}",
-        'L_beta'         : f"{L_b:.4f}",
-        'Ro_beta'        : f"{Ro_b:.6e}",
-        'jet_positions'  : '|'.join(map(str, jpos)),
-        'KE_zonal'       : f"{ke['KE_zonal']:.6e}",
-        'KE_eddy'        : f"{ke['KE_eddy']:.6e}",
-        'zonal_frac'     : f"{ke['zonal_fraction']:.4f}",
-        'RS_mean'        : f"{rs['RS_mean']:.6e}",
-        'omega_rms'      : f"{vs['omega_rms']:.6e}",
-        'omega_skew'     : f"{vs['omega_skew']:+.4f}",
-        'Qy_sign_changes': Qy_sign_changes,
-        'staircase_score': f"{staircase_score:.4f}",
-        'R_beta_star'    : f"{R_beta_star:.4f}",
+        'u_rms'            : f"{u_rms:.6f}",
+        'u_max'            : f"{u_max:.6f}",
+        'jet_count'        : jet_count,
+        'E_slope'          : f"{E_slope:.4f}",
+        'L_beta'           : f"{L_b:.4f}",
+        'Ro_beta'          : f"{Ro_b:.6e}",
+        'jet_positions'    : '|'.join(map(str, jpos)),
+        'KE_zonal'         : f"{ke['KE_zonal']:.6e}",
+        'KE_eddy'          : f"{ke['KE_eddy']:.6e}",
+        'zonal_frac'       : f"{ke['zonal_fraction']:.4f}",
+        'RS_mean'          : f"{rs['RS_mean']:.6e}",
+        'omega_rms'        : f"{vs['omega_rms']:.6e}",
+        'omega_skew'       : f"{vs['omega_skew']:+.4f}",
+        'Qy_sign_changes'  : Qy_sign_changes,
+        'staircase_score'  : f"{staircase_score:.4f}",
+        'R_beta_star'      : f"{R_beta_star:.4f}",
+        'epsilon_injection': f"{eps_inj:.6e}",
     }
     for name, value in rows.items():
         path = os.path.join(cfg.DATA_DIR, f"{name}.csv")
@@ -135,18 +137,24 @@ def run_simulation():
         'RS_mean'         : [],   # Reynolds stress 空間平均純量
         'omega_rms'       : [],   # 渦度 RMS
         'omega_skew'      : [],   # 渦度偏態（負 → 反氣旋主導）
-        'Qy_sign_changes' : [],   # Q_y 符號反轉次數（正壓不穩定判準）
-        'staircase_score' : [],   # PV 階梯分數
-        'R_beta_star'     : [],   # Zonostrophy index
+        'Qy_sign_changes'  : [],   # Q_y 符號反轉次數（正壓不穩定判準）
+        'staircase_score'  : [],   # PV 階梯分數
+        'R_beta_star'      : [],   # Zonostrophy index
+        'epsilon_injection': [],   # 能量注入率代理 ε（R_β* 公式關鍵量）
     }
 
-    # 剖面歷史（每個 SAVE_EVERY 步一筆，最終儲存為 NPZ）
+    # 剖面歷史（每個 SAVE_EVERY 步一筆，最終儲存為 NPZ + CSV）
     prof = {
         'u_bar'     : [],   # (T, NY)  Hovmöller 資料
         'RS_profile': [],   # (T, NY)  完整 Reynolds stress 剖面
         'Qy'        : [],   # (T, NY)  位渦梯度剖面
         'q_pv'      : [],   # (T, NY)  PV 剖面
     }
+
+    # 噴流壽命追蹤
+    jet_tracker    = {}   # jet_id → {'born': step, 'last_pos': y}
+    jet_id_counter = 0
+    jet_lifetimes  = []   # 已結束噴流的紀錄清單
 
     #ping-pong 緩衝（避免每步整場複製）
     src, dst = f, f_new
@@ -193,11 +201,15 @@ def run_simulation():
             prof['Qy'].append(pv_grad['Qy'])
             prof['q_pv'].append(pv_st['q_profile'])
 
+            # ── 噴流壽命追蹤 ──
+            jet_id_counter = _update_jet_tracker(
+                step, jpos, jet_tracker, jet_id_counter, jet_lifetimes)
+
             _append_metric_csvs(step, u_rms, u_max, jets, slope,
                                 L_b, Ro_b, jpos, ke, rs, vs,
                                 pv_grad['Qy_sign_changes'],
                                 pv_st['staircase_score'],
-                                R_b_star)
+                                R_b_star, eps_inj)
 
             log['step'].append(step)
             log['u_rms'].append(u_rms)
@@ -216,6 +228,7 @@ def run_simulation():
             log['Qy_sign_changes'].append(pv_grad['Qy_sign_changes'])
             log['staircase_score'].append(pv_st['staircase_score'])
             log['R_beta_star'].append(R_b_star)
+            log['epsilon_injection'].append(eps_inj)
 
             if u_max > 0.3:
                 print(f"⚠️ WARNING: Maximum velocity u_max = {u_max:.5f} exceeds the stability limit 0.3!")
@@ -234,8 +247,20 @@ def run_simulation():
                 plot_energy_spectrum(k_arr, E_arr, step, slope=slope,
                     save_path=f"output/frames/spectrum_{step:08d}.png")
     
+    # 模擬結束：將仍存活的噴流記為「活到最後」
+    final_step = cfg.MAX_STEPS
+    for jid, info in jet_tracker.items():
+        jet_lifetimes.append({
+            'jet_id'    : jid,
+            'born_step' : info['born'],
+            'died_step' : final_step,
+            'duration'  : final_step - info['born'],
+            'mean_y'    : info['last_pos'],
+            'ended_by'  : 'simulation_end',
+        })
+
     _save_summary(log)
-    _save_profiles(prof, log['step'])
+    _save_profiles(prof, log['step'], jet_lifetimes)
     _make_videos()
 
 
@@ -353,7 +378,8 @@ def _save_summary(log: dict):
                'L_beta', 'Ro_beta', 'jet_positions',
                'KE_zonal', 'KE_eddy', 'zonal_frac',
                'RS_mean', 'omega_rms', 'omega_skew',
-               'Qy_sign_changes', 'staircase_score', 'R_beta_star']
+               'Qy_sign_changes', 'staircase_score', 'R_beta_star',
+               'epsilon_injection']
     with open(csv_path, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow(columns)
@@ -376,8 +402,64 @@ def _save_summary(log: dict):
                 log['Qy_sign_changes'][i],
                 f"{log['staircase_score'][i]:.4f}",
                 f"{log['R_beta_star'][i]:.4f}",
+                f"{log['epsilon_injection'][i]:.6e}",
             ])
     print(f"  → log.csv saved  ({len(steps)} rows × {len(columns)} cols)")
+
+def _update_jet_tracker(step: int, jpos: list,
+                         jet_tracker: dict, jet_id_counter: int,
+                         jet_lifetimes: list) -> int:
+    """
+    以 greedy 最近鄰配對追蹤噴流跨時步的身份。
+
+    - 每個現有噴流找最近的新位置（距離 ≤ MATCH_DIST）→ 繼續存活
+    - 未被配對的現有噴流 → 記錄壽命後移除
+    - 未被配對的新位置 → 新噴流誕生
+
+    回傳更新後的 jet_id_counter。
+    """
+    MATCH_DIST = max(5, cfg.NY // 20)   # 預設 12 格（NY=256）
+
+    new_pos    = list(jpos)
+    matched_new = set()   # 已配對的新位置（index into new_pos）
+    matched_old = set()   # 已配對的舊 jet_id
+
+    # 對每個現有噴流找最近新位置
+    for jid, info in jet_tracker.items():
+        old_y = info['last_pos']
+        best_dist, best_i = float('inf'), -1
+        for ni, ny in enumerate(new_pos):
+            if ni in matched_new:
+                continue
+            d = abs(ny - old_y)
+            if d < best_dist:
+                best_dist, best_i = d, ni
+        if best_i >= 0 and best_dist <= MATCH_DIST:
+            jet_tracker[jid]['last_pos'] = new_pos[best_i]
+            matched_new.add(best_i)
+            matched_old.add(jid)
+
+    # 未配對舊噴流：記錄壽命
+    for jid in list(jet_tracker.keys()):
+        if jid not in matched_old:
+            info = jet_tracker.pop(jid)
+            jet_lifetimes.append({
+                'jet_id'    : jid,
+                'born_step' : info['born'],
+                'died_step' : step,
+                'duration'  : step - info['born'],
+                'mean_y'    : info['last_pos'],
+                'ended_by'  : 'disappeared',
+            })
+
+    # 未配對新位置：誕生新噴流
+    for ni, ny in enumerate(new_pos):
+        if ni not in matched_new:
+            jet_tracker[jet_id_counter] = {'born': step, 'last_pos': ny}
+            jet_id_counter += 1
+
+    return jet_id_counter
+
 
 def _jet_autocorr(u_bar_hist: np.ndarray, steps: list) -> np.ndarray:
     """
@@ -408,14 +490,18 @@ def _jet_autocorr(u_bar_hist: np.ndarray, steps: list) -> np.ndarray:
     return tau
 
 
-def _save_profiles(prof: dict, steps: list):
+def _save_profiles(prof: dict, steps: list, jet_lifetimes: list):
     """
-    儲存剖面歷史資料（NPZ）及衍生圖：
-      hovmoller.npz  / hovmoller.png  — ū(y, t) Hovmöller 圖
-      rs_profile.npz                  — 完整 Reynolds stress 剖面
-      qy_profile.npz                  — Q_y 位渦梯度剖面
-      pv_profile.npz                  — PV 剖面
-      jet_autocorr.png                — 各緯度自相關時間 vs 渦流翻轉時間
+    儲存剖面歷史資料（NPZ + CSV）及衍生圖：
+      hovmoller.npz / hovmoller.png    — ū(y, t) Hovmöller 圖
+      rs_profile.npz                   — 完整 Reynolds stress 剖面
+      qy_profile.npz                   — Q_y 位渦梯度剖面
+      pv_profile.npz                   — PV 剖面
+      jet_autocorr.png                 — 各緯度自相關時間 vs 渦流翻轉時間
+      ubar_hovmoller.csv               — ū(y,t) 全部時步（rows=時步, cols=y）
+      Qy_profile.csv                   — Q_y(y) 每 50000 步一個快照
+      q_profile.csv                    — q(y) PV 每 50000 步一個快照
+      jet_lifetime.csv                 — 各噴流壽命統計
     """
     if len(steps) == 0:
         return
@@ -491,6 +577,49 @@ def _save_profiles(prof: dict, steps: list):
     fig.savefig(os.path.join(cfg.OUTPUT_DIR, "jet_autocorr.png"), dpi=200)
     plt.close(fig)
     print(f"  → jet_autocorr.png saved.")
+
+    # ── ubar_hovmoller.csv：完整 ū(y,t)，rows=時步，cols=y ──
+    _write_profile_csv('ubar_hovmoller.csv', u_bar_hist, steps_arr,
+                       col_prefix='y', decimation=1)
+
+    # ── Qy_profile.csv / q_profile.csv：每 ~50000 步一個快照 ──
+    decimate = max(1, 50000 // cfg.SAVE_EVERY)
+    _write_profile_csv('Qy_profile.csv', qy_hist, steps_arr,
+                       col_prefix='y', decimation=decimate)
+    _write_profile_csv('q_profile.csv',  q_hist,  steps_arr,
+                       col_prefix='y', decimation=decimate)
+
+    # ── jet_lifetime.csv ──
+    lt_path = os.path.join(cfg.DATA_DIR, 'jet_lifetime.csv')
+    lt_cols = ['jet_id', 'born_step', 'died_step', 'duration', 'mean_y', 'ended_by']
+    with open(lt_path, 'w', newline='', encoding='utf-8') as fh:
+        w = csv.writer(fh)
+        w.writerow(lt_cols)
+        for rec in sorted(jet_lifetimes, key=lambda r: r['born_step']):
+            w.writerow([rec['jet_id'], rec['born_step'], rec['died_step'],
+                        rec['duration'], rec['mean_y'], rec['ended_by']])
+    print(f"  → jet_lifetime.csv saved  ({len(jet_lifetimes)} jets)")
+
+    print(f"  → 3 個剖面 CSV 已儲存 ({cfg.DATA_DIR}/)")
+
+
+def _write_profile_csv(filename: str, hist: np.ndarray,
+                        steps_arr: np.ndarray, col_prefix: str,
+                        decimation: int):
+    """
+    將二維剖面歷史陣列 hist (T, NY) 寫成 CSV。
+    格式：第一欄 step，其後 NY 欄分別為 y0, y1, ..., y(NY-1)。
+    decimation: 每隔幾個快照取一列（1 = 全部）。
+    """
+    T, NY  = hist.shape
+    path   = os.path.join(cfg.DATA_DIR, filename)
+    header = ['step'] + [f'{col_prefix}{j}' for j in range(NY)]
+    with open(path, 'w', newline='', encoding='utf-8') as fh:
+        w = csv.writer(fh)
+        w.writerow(header)
+        for i in range(0, T, decimation):
+            row = [int(steps_arr[i])] + [f"{v:.6e}" for v in hist[i]]
+            w.writerow(row)
 
 
 if __name__ == "__main__":

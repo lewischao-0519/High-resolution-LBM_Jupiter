@@ -42,6 +42,7 @@ env/
 >>>>>>> 002d11c (feat : retrack)
 *.png
 *.npy
+*.npz
 *.jpg
 *.csv
 *.mp4
