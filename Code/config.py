@@ -3,14 +3,20 @@ import os
 import numpy as np
 import taichi as ti
 
-#後端選擇
-ti.init(arch=ti.gpu, default_fp=ti.f32)
-
 #並行參數掃描：允許以環境變數覆寫特定參數（由 sweep.py 為每個子行程設定），
 #未設定時沿用下方預設值，因此單獨執行 main.py 的行為完全不變。
 def _env_override(name, default, cast=float):
     v = os.environ.get(f"LBM_{name}")
     return cast(v) if v is not None else default
+
+#隨機種子：Taichi 預設 random_seed=0，若不指定，sweep.py 平行掃描的每個子
+#行程都會用同一顆種子，AR(1) 噪音與 collision.py 的 ti.randn() 擾動在各組
+#之間完全相同，等於少了一個獨立變因。sweep.py 會替每個 run 注入不同的
+#LBM_RANDOM_SEED；單獨執行 main.py 時沒有設定，沿用 0（行為不變）。
+RANDOM_SEED = _env_override('RANDOM_SEED', 0, cast=int)
+
+#後端選擇
+ti.init(arch=ti.gpu, default_fp=ti.f32, random_seed=RANDOM_SEED)
 
 #網格基本參數
 NX        = 512           # x 方向格點數（緯向）

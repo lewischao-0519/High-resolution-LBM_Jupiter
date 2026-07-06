@@ -13,9 +13,15 @@ data/processed/sweep/ 底下的 run_* 資料夾，此時輸出不含參數欄位
 「epsilon_diverge_count」定義：後段中 u_max > 0.3（main.py 的穩定性警告
 門檻，見 main.py 內 `u_max > 0.3` 那行）的列數，次數而非布林值。
 
+「omega_skew_front」/「omega_skew_back」：與上面「後段」window 無關，固定
+取整條 log.csv（依總列數）20%~60% 當 front、60%~100% 當 back 各自的
+omega_skew 平均值，用來看渦度偏態是前段就已經定型還是後段才轉向。
+
 用法：
     python3 analysis/scan_summary.py
     python3 analysis/scan_summary.py --tail-frac 0.5 --out data/processed/sweep/scan_summary.csv
+
+也可以被 sweep.py 直接 import 呼叫 generate_summary()，掃描跑完後自動彙整。
 """
 import argparse
 import csv
@@ -32,6 +38,10 @@ STAT_COLUMNS = ['R_beta_star', 'zonal_frac', 'jet_count',
 
 DIVERGE_COL = 'u_max'
 DIVERGE_THRESHOLD = 0.3  # 對齊 main.py 的穩定性警告門檻
+
+# omega_skew_front / omega_skew_back：固定依「總步數」切，跟 --tail-frac 無關
+FRONT_BACK_COL = 'omega_skew'
+FRONT_START_FRAC, FRONT_END_FRAC, BACK_END_FRAC = 0.2, 0.6, 1.0
 
 # manifest.csv 裡不屬於掃描參數的欄位（sweep.py write_manifest 固定寫入）
 MANIFEST_NON_PARAM_COLS = {'run_id', 'status', 'elapsed_sec', 'output_dir', 'data_dir'}
@@ -89,6 +99,18 @@ def summarize_run(log_path: str, tail_frac: float) -> dict:
     else:
         row['epsilon_diverge_count'] = ''
 
+    if FRONT_BACK_COL in cols and n_total > 0:
+        front_lo = int(np.floor(n_total * FRONT_START_FRAC))
+        front_hi = int(np.floor(n_total * FRONT_END_FRAC))
+        back_hi  = int(np.floor(n_total * BACK_END_FRAC))
+        front = cols[FRONT_BACK_COL][front_lo:front_hi]
+        back  = cols[FRONT_BACK_COL][front_hi:back_hi]
+        row['omega_skew_front'] = front.mean() if len(front) > 0 else ''
+        row['omega_skew_back']  = back.mean()  if len(back)  > 0 else ''
+    else:
+        row['omega_skew_front'] = ''
+        row['omega_skew_back']  = ''
+
     row['n_rows_tail'] = n_tail
     row['n_rows_total'] = n_total
     return row
@@ -124,34 +146,28 @@ def build_param_row(manifest_rec: dict) -> dict:
     return row
 
 
-def main():
-    parser = argparse.ArgumentParser(description="彙整參數掃描各組後段統計量成 scan_summary.csv")
-    parser.add_argument('--manifest', default=os.path.join(ROOT, 'output', 'sweep', 'manifest.csv'),
-                         help='sweep.py 產生的 manifest.csv 路徑')
-    parser.add_argument('--sweep-data-root', default=os.path.join(ROOT, 'data', 'processed', 'sweep'),
-                         help='找不到 manifest.csv 時，退回掃描此目錄底下的 run_* 資料夾')
-    parser.add_argument('--out', default=None, help='輸出 csv 路徑，預設存在 sweep-data-root/scan_summary.csv')
-    parser.add_argument('--tail-frac', type=float, default=0.5,
-                         help='每組 log.csv 取最後幾成的列數當「後段」，預設 0.5＝後 50%%')
-    args = parser.parse_args()
-
-    manifest = load_manifest(args.manifest)
+def generate_summary(manifest_path: str, sweep_data_root: str,
+                      out_path: str = None, tail_frac: float = 0.5) -> list:
+    """讀 manifest（或退回掃描 sweep_data_root），彙整每組後段統計量並寫出
+    scan_summary.csv。回傳寫入的 rows（list[dict]），沒有任何一組成功則回傳
+    空 list 且不寫檔。CLI 的 main() 與 sweep.py 都呼叫這個函式。"""
+    manifest = load_manifest(manifest_path)
 
     if manifest:
         run_ids = sorted(manifest.keys())
-    elif os.path.isdir(args.sweep_data_root):
-        run_ids = sorted(d for d in os.listdir(args.sweep_data_root)
-                          if os.path.isdir(os.path.join(args.sweep_data_root, d)))
+    elif os.path.isdir(sweep_data_root):
+        run_ids = sorted(d for d in os.listdir(sweep_data_root)
+                          if os.path.isdir(os.path.join(sweep_data_root, d)))
     else:
-        print(f"❌ 找不到 {args.manifest}，也找不到 {args.sweep_data_root}")
-        return
+        print(f"❌ 找不到 {manifest_path}，也找不到 {sweep_data_root}")
+        return []
 
     rows = []
     for run_id in run_ids:
         if run_id in manifest:
             data_dir = manifest[run_id]['data_dir']
         else:
-            data_dir = os.path.join(args.sweep_data_root, run_id)
+            data_dir = os.path.join(sweep_data_root, run_id)
         log_path = os.path.join(data_dir, 'log.csv')
         if not os.path.isfile(log_path):
             print(f"⚠️  跳過 {run_id}：找不到 {log_path}")
@@ -160,15 +176,15 @@ def main():
         row = {'run_id': run_id}
         if run_id in manifest:
             row.update(build_param_row(manifest[run_id]))
-        row.update(summarize_run(log_path, args.tail_frac))
+        row.update(summarize_run(log_path, tail_frac))
         rows.append(row)
         print(f"✓ {run_id}  ({row['n_rows_tail']}/{row['n_rows_total']} rows 後段)")
 
     if not rows:
         print("沒有任何一組成功彙整。")
-        return
+        return []
 
-    out_path = args.out or os.path.join(args.sweep_data_root, 'scan_summary.csv')
+    out_path = out_path or os.path.join(sweep_data_root, 'scan_summary.csv')
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
     fieldnames = list(rows[0].keys())
@@ -183,6 +199,20 @@ def main():
         writer.writerows(rows)
 
     print(f"\n📋 scan_summary.csv 已儲存：{out_path}  ({len(rows)} 組)")
+    return rows
+
+
+def main():
+    parser = argparse.ArgumentParser(description="彙整參數掃描各組後段統計量成 scan_summary.csv")
+    parser.add_argument('--manifest', default=os.path.join(ROOT, 'output', 'sweep', 'manifest.csv'),
+                         help='sweep.py 產生的 manifest.csv 路徑')
+    parser.add_argument('--sweep-data-root', default=os.path.join(ROOT, 'data', 'processed', 'sweep'),
+                         help='找不到 manifest.csv 時，退回掃描此目錄底下的 run_* 資料夾')
+    parser.add_argument('--out', default=None, help='輸出 csv 路徑，預設存在 sweep-data-root/scan_summary.csv')
+    parser.add_argument('--tail-frac', type=float, default=0.5,
+                         help='每組 log.csv 取最後幾成的列數當「後段」，預設 0.5＝後 50%%')
+    args = parser.parse_args()
+    generate_summary(args.manifest, args.sweep_data_root, args.out, args.tail_frac)
 
 
 if __name__ == '__main__':
