@@ -1,5 +1,5 @@
 #外掛工具
-import os, sys, subprocess, shutil, csv
+import os, sys, subprocess, shutil, csv, datetime
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -51,6 +51,34 @@ def setup_output_dirs():
     for d in [cfg.OUTPUT_DIR, cfg.DATA_DIR, "output/frames"]:
         os.makedirs(d, exist_ok=True)
     print("🪐 Jupiter LBM Simulation — initializing...")
+
+# 需要記錄的 config 參數（排除 ti.field / numpy 陣列 / 函式等不適合純文字記錄的項目）
+_CONFIG_PARAMS = [
+    'NX', 'NY', 'MAX_STEPS', 'SAVE_EVERY', 'SAVE_SPECTRUM',
+    'F0', 'NY_REF', 'BETA_REF', 'BETA',
+    'EPSILON',
+    'SPONGE_FRAC', 'EPSILON_MAX',
+    'Tc', 'alpha', 'sigma', 'WARMUP_STEPS',
+    's1', 's2', 's4', 's6',
+    'U_MAX', 'NU', 'TAU', 'OMEGA',
+    'JET_SMOOTH_WINDOW', 'JET_THRESHOLD',
+    'PROFILE_SNAPSHOT_EVERY', 'HEAVY_CHECKPOINT_EVERY',
+    'OUTPUT_DIR', 'DATA_DIR',
+]
+
+def _save_config_snapshot():
+    """
+    把這次模擬實際使用的 config 參數存成一份帶時間戳記的 txt，
+    方便事後比對「這批數據是用哪組參數跑出來的」，避免跟其他次
+    模擬的結果搞混（尤其是平滑視窗、門檻這類會直接影響診斷結果的參數）。
+    """
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    path = os.path.join(cfg.DATA_DIR, f'config_{timestamp}.txt')
+    with open(path, 'w', encoding='utf-8') as fh:
+        fh.write(f"# Jupiter LBM config snapshot — {timestamp}\n")
+        for name in _CONFIG_PARAMS:
+            fh.write(f"{name} = {getattr(cfg, name)}\n")
+    print(f"  → config 快照已儲存：{path}")
 
 # 各診斷量 CSV 的欄位定義
 _METRIC_HEADERS = [
@@ -158,6 +186,7 @@ def _append_jet_lifetime_rows(records: list):
 def run_simulation():
     #工具初始化
     setup_output_dirs()
+    _save_config_snapshot()
     _init_metric_csvs()
     _init_profile_csvs()
     init_constants()
