@@ -1,14 +1,21 @@
 #外掛程式
+import os
 import numpy as np
 import taichi as ti
 
 #後端選擇
 ti.init(arch=ti.gpu, default_fp=ti.f32)
 
+#並行參數掃描：允許以環境變數覆寫特定參數（由 sweep.py 為每個子行程設定），
+#未設定時沿用下方預設值，因此單獨執行 main.py 的行為完全不變。
+def _env_override(name, default, cast=float):
+    v = os.environ.get(f"LBM_{name}")
+    return cast(v) if v is not None else default
+
 #網格基本參數
 NX        = 512           # x 方向格點數（緯向）
 NY        = 256           # y 方向格點數（徑向 / 緯度方向）
-MAX_STEPS = 1000000        # 總演化步數
+MAX_STEPS = _env_override('MAX_STEPS', 1000000, int)        # 總演化步數
 SAVE_EVERY = 5000         # 每幾步存一幀
 SAVE_SPECTRUM = 4*SAVE_EVERY    # 每幾步存數據
 
@@ -42,21 +49,21 @@ F0 = 0                #科氏力參數基準值（根據模擬緯度調整）
 #   要它與解析度無關，須 BETA·NY = const → BETA = BETA_REF · NY_REF / NY
 # 這樣顯式科氏力每步注入的能量(∝f_cor²)不隨解析度暴增，避免發散。
 NY_REF   = 256           #參數校正時的基準解析度
-BETA_REF = 5e-5          #基準解析度下的每格梯度
+BETA_REF = _env_override('BETA_REF', 5e-5)          #基準解析度下的每格梯度
 BETA = BETA_REF * NY_REF / NY   #依實際 NY 動態換算（任意解析度皆可）
 
 #Reighly drag
-EPSILON = 7e-5           #摩擦係數
+EPSILON = _env_override('EPSILON', 7e-5)           #摩擦係數
 
 #海綿層參數
 SPONGE_FRAC = 0.15        #海綿層厚度占總高度的比例
-EPSILON_MAX = 1.5e-4       #海綿層最大阻尼（外側）
+EPSILON_MAX = _env_override('EPSILON_MAX', 1.5e-4)       #海綿層最大阻尼（外側）
 
 # AR參數
-Tc = 400.0                    #時間尺度
+Tc = _env_override('TC', 400.0)                    #時間尺度
 alpha = np.exp(-1.0 / Tc)     #自相關係數
-sigma = 1.5e-6                  #振幅
-WARMUP_STEPS = 100000 
+sigma = _env_override('SIGMA', 1.5e-6)                  #振幅
+WARMUP_STEPS = 100000
 
 #MRT矩陣參數
 s1, s2, s4, s6 = 1.2, 1.2, 1.8, 1.8
@@ -67,9 +74,9 @@ NU      = 0.0003               # 運動黏滯係數 (調大以符合 k^-3 斜率
 TAU     = 3.0 * NU + 0.5       # 鬆弛時間（現已被MRT取代，但保留以供參考）
 OMEGA   = float(1.0 / TAU)     # 單純BGK鬆弛頻率（現已被MRT取代）
 
-#輸出目錄
-OUTPUT_DIR    = "output"
-DATA_DIR      = "data/processed"
+#輸出目錄（sweep.py 平行掃描時，各子行程各自覆寫成獨立資料夾，避免互相覆蓋）
+OUTPUT_DIR    = os.environ.get('LBM_OUTPUT_DIR', "output")
+DATA_DIR      = os.environ.get('LBM_DATA_DIR', "data/processed")
 
 #噴流偵測與 PV 梯度計算的平滑參數
 # ū(y) 在偵測噴流峰值 / 計算 Q_y 二階微分前，先做空間滑動平均，

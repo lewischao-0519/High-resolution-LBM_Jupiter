@@ -48,7 +48,7 @@ from utils.plotting import (
 
 #創建資料夾
 def setup_output_dirs():
-    for d in [cfg.OUTPUT_DIR, cfg.DATA_DIR, "output/frames"]:
+    for d in [cfg.OUTPUT_DIR, cfg.DATA_DIR, os.path.join(cfg.OUTPUT_DIR, "frames")]:
         os.makedirs(d, exist_ok=True)
     print("🪐 Jupiter LBM Simulation — initializing...")
 
@@ -315,18 +315,18 @@ def run_simulation():
                 print(f"⚠️ WARNING: Maximum velocity u_max = {u_max:.5f} exceeds the stability limit 0.3!")
 
             plot_velocity_magnitude(ux_np, uy_np, step,
-                save_path=f"output/frames/vel_{step:08d}.jpg")
+                save_path=os.path.join(cfg.OUTPUT_DIR, "frames", f"vel_{step:08d}.jpg"))
             plot_vorticity(omega_np, step,
-                save_path=f"output/frames/vort_{step:08d}.jpg")
+                save_path=os.path.join(cfg.OUTPUT_DIR, "frames", f"vort_{step:08d}.jpg"))
             print(f"Step {step:6d} | U_rms={u_rms:.5f} | U_max={u_max:.5f} | Jets={jets} | "
                   f"E_slope={slope:.2f} | L_β={L_b:.1f} | KE_zon%={ke['zonal_fraction']*100:.1f}% | "
                   f"ω_skew={vs['omega_skew']:+.3f} | AR={'ON' if step>=(cfg.WARMUP_STEPS) else 'OFF'}")
 
             if step % cfg.SAVE_SPECTRUM == 0:
                 plot_zonal_profile(zm['y'], zm['u_bar'], step,
-                    save_path=f"output/frames/zonal_{step:08d}.png")
+                    save_path=os.path.join(cfg.OUTPUT_DIR, "frames", f"zonal_{step:08d}.png"))
                 plot_energy_spectrum(k_arr, E_arr, step, slope=slope,
-                    save_path=f"output/frames/spectrum_{step:08d}.png")
+                    save_path=os.path.join(cfg.OUTPUT_DIR, "frames", f"spectrum_{step:08d}.png"))
 
             # ── 重量級檢查點（低頻率）：summary.png / hovmoller.png /
             #    jet_autocorr.png / NPZ。這些需要重繪圖表、跑 FFT 自相關、
@@ -357,17 +357,22 @@ def run_simulation():
 def _make_videos():
     """模擬結束後自動合成影片，完成後刪除暫存 frames。"""
     script = os.path.join(ROOT, "utils", "make_video.py")
+    # ffmpeg 的 concat demuxer 會把清單裡的相對路徑解析成「相對於暫存清單檔
+    # 案所在目錄」而非目前工作目錄，因此這裡一律轉成絕對路徑再傳給子行程，
+    # 避免平行掃描（cfg.OUTPUT_DIR 可能是相對路徑）時找不到 frame 檔案。
+    out_dir    = os.path.abspath(cfg.OUTPUT_DIR)
+    frames_dir = os.path.join(out_dir, "frames")
     print("\n🎬 開始合成影片...")
     result = subprocess.run(
-        [sys.executable, script, "--fps", "10", "--fps-sparse", "4"],
+        [sys.executable, script, "--fps", "10", "--fps-sparse", "4",
+         "--frames-dir", frames_dir, "--out-dir", out_dir],
         capture_output=False
     )
     if result.returncode != 0:
         print("⚠️  影片合成失敗（ffmpeg 未安裝？），請手動執行：")
-        print(f"   python3 utils/make_video.py")
+        print(f"   python3 utils/make_video.py --frames-dir {frames_dir} --out-dir {out_dir}")
         return
     # 清除暫存 frames 資料夾
-    frames_dir = os.path.join(ROOT, "output", "frames")
     if os.path.isdir(frames_dir):
         shutil.rmtree(frames_dir)
         print(f"  🗑️  已刪除暫存 frames：{frames_dir}")

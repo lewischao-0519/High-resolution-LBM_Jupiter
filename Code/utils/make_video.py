@@ -17,6 +17,9 @@ utils/make_video.py
 import os, sys, glob, subprocess, argparse, tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# 預設路徑（獨立執行時沿用舊行為）；平行掃描時由 main.py 以 --frames-dir /
+# --out-dir 指向各自的輸出資料夾，避免多組結果互相覆蓋。
 FRAMES_DIR = os.path.join(ROOT, "output", "frames")
 OUT_DIR    = os.path.join(ROOT, "output")
 
@@ -110,6 +113,8 @@ def make_video(prefix: str, ext: str, fps: int, output_name: str):
 
 
 def main():
+    global FRAMES_DIR, OUT_DIR
+
     parser = argparse.ArgumentParser(description="Assemble LBM frames into MP4 videos")
     parser.add_argument("--type", choices=["vel", "vort", "zonal", "spectrum", "all"],
                         default="all", help="要合成的影片類型（預設 all）")
@@ -117,7 +122,14 @@ def main():
                         help="影片幀率（預設 24）")
     parser.add_argument("--fps-sparse", type=int, default=8,
                         help="低頻快照（zonal/spectrum）的幀率（預設 8）")
+    parser.add_argument("--frames-dir", default=FRAMES_DIR,
+                        help="快照來源資料夾（預設 output/frames，平行掃描時由呼叫端指定各自路徑）")
+    parser.add_argument("--out-dir", default=OUT_DIR,
+                        help="影片輸出資料夾（預設 output，平行掃描時由呼叫端指定各自路徑）")
     args = parser.parse_args()
+
+    FRAMES_DIR = args.frames_dir
+    OUT_DIR    = args.out_dir
 
     check_ffmpeg()
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -133,7 +145,7 @@ def main():
     for t in targets:
         make_video(*jobs[t])
 
-    print("\n🪐 完成！影片儲存於 output/")
+    print(f"\n🪐 完成！影片儲存於 {OUT_DIR}/")
 
 
 if __name__ == "__main__":
