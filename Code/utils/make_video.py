@@ -16,6 +16,12 @@ utils/make_video.py
 
 import os, sys, glob, subprocess, argparse, tempfile
 
+# 同 main.py：stdout 若被導向檔案（而非真正終端機），Windows 會退回用系統
+# locale 編碼，無法編碼本檔案 print() 用到的 Emoji 而 crash，強制用 UTF-8。
+if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # 預設路徑（獨立執行時沿用舊行為）；平行掃描時由 main.py 以 --frames-dir /

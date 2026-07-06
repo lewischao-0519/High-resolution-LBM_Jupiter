@@ -19,6 +19,12 @@ Taichi 的 GPU context 與 field 是行程內全域、載入時就依 NX/NY 建�
 import os, sys, csv, time, itertools, subprocess, argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# stdout 若被導向檔案（而非真正終端機），Windows 會退回用系統 locale 編碼，
+# 無法編碼本檔案 print() 用到的 Emoji 而 crash，強制用 UTF-8。
+if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
 # ── 參數網格：在此定義要掃描的組合，key 對應 config.py 的 LBM_<key> 環境變數覆寫。
@@ -54,6 +60,11 @@ def run_one(run_id: str, params: dict) -> dict:
     env['LBM_DATA_DIR']   = data_dir
     for k, v in params.items():
         env[f'LBM_{k}'] = str(v)
+    # main.py 的 print() 大量使用 Emoji；子行程 stdout 一旦被導向檔案（而非
+    # 真正的終端機），Windows 會退回用系統 locale 編碼（例如 cp950），無法
+    # 編碼 Emoji 而 crash。強制用 UTF-8，避免這個跟參數本身無關的錯誤。
+    env['PYTHONIOENCODING'] = 'utf-8'
+    env['PYTHONUTF8']       = '1'
 
     log_path = os.path.join(out_dir, "run.log")
     print(f"▶ 啟動 {run_id}  {params}")

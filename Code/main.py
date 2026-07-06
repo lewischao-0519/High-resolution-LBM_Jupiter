@@ -6,6 +6,14 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
+# print() 大量使用 Emoji；stdout 一旦不是接到真正的終端機（被導向檔案、
+# 或透過 sweep.py 平行執行時），Windows 會退回用系統 locale 編碼（例如
+# cp950）而無法編碼 Emoji 直接 crash。強制用 UTF-8 避免這個跟模擬邏輯
+# 無關的錯誤。
+if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 #儲存路徑
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
