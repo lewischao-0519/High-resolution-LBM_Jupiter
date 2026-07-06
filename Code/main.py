@@ -110,11 +110,56 @@ def _append_metric_csvs(step: int, u_rms, u_max, jet_count, E_slope,
         with open(path, 'a', newline='', encoding='utf-8') as fh:
             csv.writer(fh).writerow([step, value])
 
+# 剖面型 CSV（每列 = 一個時步的完整 y 剖面）的欄位定義
+_PROFILE_HEADERS = [
+    ('ubar_hovmoller', 'y'),
+    ('Qy_profile',     'y'),
+    ('q_profile',      'y'),
+]
+_JET_LIFETIME_COLS = ['jet_id', 'born_step', 'died_step', 'duration', 'mean_y', 'ended_by']
+
+def _init_profile_csvs():
+    """
+    清除舊資料並為剖面型 CSV 建立標題列。這些檔案之後全部用『追加寫入』
+    維護（每次只寫一列新資料），成本是 O(1)，不會隨模擬進度變慢——
+    不像先前每次checkpoint都要重寫整段歷史（O(T)，隨時間增長成本暴增，
+    拖慢GPU迴圈、抵銷平行運算的效能）。
+    """
+    for name, prefix in _PROFILE_HEADERS:
+        path = os.path.join(cfg.DATA_DIR, f"{name}.csv")
+        header = ['step'] + [f'{prefix}{j}' for j in range(cfg.NY)]
+        with open(path, 'w', newline='', encoding='utf-8') as fh:
+            csv.writer(fh).writerow(header)
+
+    lt_path = os.path.join(cfg.DATA_DIR, 'jet_lifetime.csv')
+    with open(lt_path, 'w', newline='', encoding='utf-8') as fh:
+        csv.writer(fh).writerow(_JET_LIFETIME_COLS)
+
+    print(f"  → 剖面 CSV（ubar_hovmoller / Qy_profile / q_profile / jet_lifetime）已初始化")
+
+def _append_profile_row(filename: str, step: int, arr: np.ndarray):
+    """對單一剖面 CSV 追加一列（O(1)，不重寫既有內容）。"""
+    path = os.path.join(cfg.DATA_DIR, f"{filename}.csv")
+    with open(path, 'a', newline='', encoding='utf-8') as fh:
+        csv.writer(fh).writerow([step] + [f"{v:.6e}" for v in arr])
+
+def _append_jet_lifetime_rows(records: list):
+    """對 jet_lifetime.csv 追加新結束（或存活到模擬結束）的噴流紀錄。"""
+    if not records:
+        return
+    path = os.path.join(cfg.DATA_DIR, 'jet_lifetime.csv')
+    with open(path, 'a', newline='', encoding='utf-8') as fh:
+        w = csv.writer(fh)
+        for rec in records:
+            w.writerow([rec['jet_id'], rec['born_step'], rec['died_step'],
+                        rec['duration'], rec['mean_y'], rec['ended_by']])
+
 #主程式
 def run_simulation():
     #工具初始化
     setup_output_dirs()
     _init_metric_csvs()
+    _init_profile_csvs()
     init_constants()
     init_fields()
     init_mrt_matrices()
@@ -195,15 +240,22 @@ def run_simulation():
             eps_inj  = estimate_energy_injection(ke['KE_total'])
             R_b_star = zonostrophy_index(u_rms, eps_inj)
 
-            # ── 剖面歷史（存 NPZ 用） ──
+            # ── 剖面歷史（存 NPZ 用，僅留在記憶體，重量級存檔才落地） ──
             prof['u_bar'].append(zm['u_bar'].astype(np.float32))
             prof['RS_profile'].append(rs['RS_profile'].astype(np.float32))
             prof['Qy'].append(pv_grad['Qy'])
             prof['q_pv'].append(pv_st['q_profile'])
 
-            # ── 噴流壽命追蹤 ──
-            jet_id_counter = _update_jet_tracker(
+            # ── 剖面 CSV：O(1) 增量追加，不重寫歷史，維持高頻率也不影響效能 ──
+            _append_profile_row('ubar_hovmoller', step, zm['u_bar'])
+            if step % cfg.PROFILE_SNAPSHOT_EVERY == 0:
+                _append_profile_row('Qy_profile', step, pv_grad['Qy'])
+                _append_profile_row('q_profile',  step, pv_st['q_profile'])
+
+            # ── 噴流壽命追蹤：噴流消失當下立刻把該筆紀錄追加進 CSV ──
+            jet_id_counter, newly_dead = _update_jet_tracker(
                 step, jpos, jet_tracker, jet_id_counter, jet_lifetimes)
+            _append_jet_lifetime_rows(newly_dead)
 
             _append_metric_csvs(step, u_rms, u_max, jets, slope,
                                 L_b, Ro_b, jpos, ke, rs, vs,
@@ -246,21 +298,30 @@ def run_simulation():
                     save_path=f"output/frames/zonal_{step:08d}.png")
                 plot_energy_spectrum(k_arr, E_arr, step, slope=slope,
                     save_path=f"output/frames/spectrum_{step:08d}.png")
-    
-    # 模擬結束：將仍存活的噴流記為「活到最後」
-    final_step = cfg.MAX_STEPS
-    for jid, info in jet_tracker.items():
-        jet_lifetimes.append({
-            'jet_id'    : jid,
-            'born_step' : info['born'],
-            'died_step' : final_step,
-            'duration'  : final_step - info['born'],
-            'mean_y'    : info['last_pos'],
-            'ended_by'  : 'simulation_end',
-        })
+
+            # ── 重量級檢查點（低頻率）：summary.png / hovmoller.png /
+            #    jet_autocorr.png / NPZ。這些需要重繪圖表、跑 FFT 自相關、
+            #    輸出整段歷史陣列，成本遠高於上面的逐步增量 CSV，因此用
+            #    獨立、低得多的頻率（cfg.HEAVY_CHECKPOINT_EVERY）執行，
+            #    避免拖慢 GPU 迴圈、抵銷平行運算的效能 ──
+            if step % cfg.HEAVY_CHECKPOINT_EVERY == 0:
+                print(f"  ⏺ Step {step}: 寫入重量級檢查點...")
+                _save_summary(log)
+                _save_profile_artifacts(prof, log['step'])
+
+    # 模擬結束：將仍存活的噴流記為「活到最後」，並追加進 jet_lifetime.csv
+    final_survivors = [{
+        'jet_id'    : jid,
+        'born_step' : info['born'],
+        'died_step' : cfg.MAX_STEPS,
+        'duration'  : cfg.MAX_STEPS - info['born'],
+        'mean_y'    : info['last_pos'],
+        'ended_by'  : 'simulation_end',
+    } for jid, info in jet_tracker.items()]
+    _append_jet_lifetime_rows(final_survivors)
 
     _save_summary(log)
-    _save_profiles(prof, log['step'], jet_lifetimes)
+    _save_profile_artifacts(prof, log['step'])
     _make_videos()
 
 
@@ -408,7 +469,7 @@ def _save_summary(log: dict):
 
 def _update_jet_tracker(step: int, jpos: list,
                          jet_tracker: dict, jet_id_counter: int,
-                         jet_lifetimes: list) -> int:
+                         jet_lifetimes: list):
     """
     以 greedy 最近鄰配對追蹤噴流跨時步的身份。
 
@@ -416,7 +477,9 @@ def _update_jet_tracker(step: int, jpos: list,
     - 未被配對的現有噴流 → 記錄壽命後移除
     - 未被配對的新位置 → 新噴流誕生
 
-    回傳更新後的 jet_id_counter。
+    回傳 (更新後的 jet_id_counter, 本次新結束的噴流紀錄列表)。
+    後者供呼叫端立即追加進 jet_lifetime.csv（事件觸發式的增量寫入，
+    不需要每次都重寫整份壽命紀錄表）。
     """
     MATCH_DIST = max(5, cfg.NY // 20)   # 預設 12 格（NY=256）
 
@@ -440,17 +503,20 @@ def _update_jet_tracker(step: int, jpos: list,
             matched_old.add(jid)
 
     # 未配對舊噴流：記錄壽命
+    newly_dead = []
     for jid in list(jet_tracker.keys()):
         if jid not in matched_old:
             info = jet_tracker.pop(jid)
-            jet_lifetimes.append({
+            record = {
                 'jet_id'    : jid,
                 'born_step' : info['born'],
                 'died_step' : step,
                 'duration'  : step - info['born'],
                 'mean_y'    : info['last_pos'],
                 'ended_by'  : 'disappeared',
-            })
+            }
+            newly_dead.append(record)
+    jet_lifetimes.extend(newly_dead)
 
     # 未配對新位置：誕生新噴流
     for ni, ny in enumerate(new_pos):
@@ -458,7 +524,7 @@ def _update_jet_tracker(step: int, jpos: list,
             jet_tracker[jet_id_counter] = {'born': step, 'last_pos': ny}
             jet_id_counter += 1
 
-    return jet_id_counter
+    return jet_id_counter, newly_dead
 
 
 def _jet_autocorr(u_bar_hist: np.ndarray, steps: list) -> np.ndarray:
@@ -490,18 +556,24 @@ def _jet_autocorr(u_bar_hist: np.ndarray, steps: list) -> np.ndarray:
     return tau
 
 
-def _save_profiles(prof: dict, steps: list, jet_lifetimes: list):
+def _save_profile_artifacts(prof: dict, steps: list):
     """
-    儲存剖面歷史資料（NPZ + CSV）及衍生圖：
+    儲存「重量級」剖面衍生輸出（NPZ + 圖表）：
       hovmoller.npz / hovmoller.png    — ū(y, t) Hovmöller 圖
       rs_profile.npz                   — 完整 Reynolds stress 剖面
       qy_profile.npz                   — Q_y 位渦梯度剖面
       pv_profile.npz                   — PV 剖面
       jet_autocorr.png                 — 各緯度自相關時間 vs 渦流翻轉時間
-      ubar_hovmoller.csv               — ū(y,t) 全部時步（rows=時步, cols=y）
-      Qy_profile.csv                   — Q_y(y) 每 50000 步一個快照
-      q_profile.csv                    — q(y) PV 每 50000 步一個快照
-      jet_lifetime.csv                 — 各噴流壽命統計
+
+    這些需要重繪圖表、跑 FFT 自相關、輸出整段歷史陣列，成本遠高於逐步
+    增量的 CSV 寫入，因此只在 cfg.HEAVY_CHECKPOINT_EVERY 這個低頻率下
+    呼叫（見 run_simulation）。NPZ 改用 np.savez（不壓縮）而非
+    savez_compressed——這裡的陣列本來就很小（NY×T），壓縮省下的磁碟空間
+    可忽略，但壓縮運算本身的 CPU 成本會隨歷史長度線性增加，拖慢 GPU 迴圈。
+
+    ubar_hovmoller.csv / Qy_profile.csv / q_profile.csv / jet_lifetime.csv
+    這幾份原始資料改成逐步/逐事件增量追加寫入（見 _append_profile_row /
+    _append_jet_lifetime_rows），不在這裡處理。
     """
     if len(steps) == 0:
         return
@@ -515,15 +587,15 @@ def _save_profiles(prof: dict, steps: list, jet_lifetimes: list):
     qy_hist    = np.stack(prof['Qy'],         axis=0)
     q_hist     = np.stack(prof['q_pv'],       axis=0)
 
-    # ── 存 NPZ ──
-    np.savez_compressed(os.path.join(cfg.DATA_DIR, 'hovmoller.npz'),
-                        u_bar=u_bar_hist, steps=steps_arr, y=y_arr)
-    np.savez_compressed(os.path.join(cfg.DATA_DIR, 'rs_profile.npz'),
-                        RS_profile=rs_hist, steps=steps_arr, y=y_arr)
-    np.savez_compressed(os.path.join(cfg.DATA_DIR, 'qy_profile.npz'),
-                        Qy=qy_hist, steps=steps_arr, y=y_arr)
-    np.savez_compressed(os.path.join(cfg.DATA_DIR, 'pv_profile.npz'),
-                        q_pv=q_hist, steps=steps_arr, y=y_arr)
+    # ── 存 NPZ（不壓縮，降低 CPU 成本） ──
+    np.savez(os.path.join(cfg.DATA_DIR, 'hovmoller.npz'),
+             u_bar=u_bar_hist, steps=steps_arr, y=y_arr)
+    np.savez(os.path.join(cfg.DATA_DIR, 'rs_profile.npz'),
+             RS_profile=rs_hist, steps=steps_arr, y=y_arr)
+    np.savez(os.path.join(cfg.DATA_DIR, 'qy_profile.npz'),
+             Qy=qy_hist, steps=steps_arr, y=y_arr)
+    np.savez(os.path.join(cfg.DATA_DIR, 'pv_profile.npz'),
+             q_pv=q_hist, steps=steps_arr, y=y_arr)
     print(f"  → 4 個剖面 NPZ 已儲存 ({cfg.DATA_DIR}/)")
 
     # ── Hovmöller 圖 ──
@@ -577,49 +649,6 @@ def _save_profiles(prof: dict, steps: list, jet_lifetimes: list):
     fig.savefig(os.path.join(cfg.OUTPUT_DIR, "jet_autocorr.png"), dpi=200)
     plt.close(fig)
     print(f"  → jet_autocorr.png saved.")
-
-    # ── ubar_hovmoller.csv：完整 ū(y,t)，rows=時步，cols=y ──
-    _write_profile_csv('ubar_hovmoller.csv', u_bar_hist, steps_arr,
-                       col_prefix='y', decimation=1)
-
-    # ── Qy_profile.csv / q_profile.csv：每 ~50000 步一個快照 ──
-    decimate = max(1, 50000 // cfg.SAVE_EVERY)
-    _write_profile_csv('Qy_profile.csv', qy_hist, steps_arr,
-                       col_prefix='y', decimation=decimate)
-    _write_profile_csv('q_profile.csv',  q_hist,  steps_arr,
-                       col_prefix='y', decimation=decimate)
-
-    # ── jet_lifetime.csv ──
-    lt_path = os.path.join(cfg.DATA_DIR, 'jet_lifetime.csv')
-    lt_cols = ['jet_id', 'born_step', 'died_step', 'duration', 'mean_y', 'ended_by']
-    with open(lt_path, 'w', newline='', encoding='utf-8') as fh:
-        w = csv.writer(fh)
-        w.writerow(lt_cols)
-        for rec in sorted(jet_lifetimes, key=lambda r: r['born_step']):
-            w.writerow([rec['jet_id'], rec['born_step'], rec['died_step'],
-                        rec['duration'], rec['mean_y'], rec['ended_by']])
-    print(f"  → jet_lifetime.csv saved  ({len(jet_lifetimes)} jets)")
-
-    print(f"  → 3 個剖面 CSV 已儲存 ({cfg.DATA_DIR}/)")
-
-
-def _write_profile_csv(filename: str, hist: np.ndarray,
-                        steps_arr: np.ndarray, col_prefix: str,
-                        decimation: int):
-    """
-    將二維剖面歷史陣列 hist (T, NY) 寫成 CSV。
-    格式：第一欄 step，其後 NY 欄分別為 y0, y1, ..., y(NY-1)。
-    decimation: 每隔幾個快照取一列（1 = 全部）。
-    """
-    T, NY  = hist.shape
-    path   = os.path.join(cfg.DATA_DIR, filename)
-    header = ['step'] + [f'{col_prefix}{j}' for j in range(NY)]
-    with open(path, 'w', newline='', encoding='utf-8') as fh:
-        w = csv.writer(fh)
-        w.writerow(header)
-        for i in range(0, T, decimation):
-            row = [int(steps_arr[i])] + [f"{v:.6e}" for v in hist[i]]
-            w.writerow(row)
 
 
 if __name__ == "__main__":

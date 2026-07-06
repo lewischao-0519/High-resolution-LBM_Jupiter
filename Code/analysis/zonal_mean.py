@@ -37,10 +37,35 @@ def compute_zonal_mean() -> dict:
     }
 
 
-def count_jet_streams(u_bar, threshold=0.8):
-    u_std = np.std(u_bar)
+def smooth_profile(u_bar: np.ndarray, window: int = None) -> np.ndarray:
+    """
+    對緯向平均剖面 ū(y) 做空間滑動平均（邊界用 edge 值延伸，非週期性），
+    去除小尺度渦流雜訊，避免其被誤判為噴流峰值或被微分放大。
+
+    window: 滑動視窗大小（格點），須為奇數；預設取 cfg.JET_SMOOTH_WINDOW。
+    """
+    if window is None:
+        window = cfg.JET_SMOOTH_WINDOW
+    if window <= 1 or len(u_bar) < window:
+        return u_bar.astype(np.float64)
+
+    kernel = np.ones(window) / window
+    pad = window // 2
+    padded = np.pad(u_bar.astype(np.float64), pad, mode='edge')
+    return np.convolve(padded, kernel, mode='valid')
+
+
+def count_jet_streams(u_bar, threshold=None):
+    """
+    偵測噴流數量：先做空間平滑再抓局部極值，避免小尺度渦流雜訊
+    疊在大尺度噴流上造成過度偵測。
+    """
+    if threshold is None:
+        threshold = cfg.JET_THRESHOLD
+    u_smooth = smooth_profile(u_bar)
+    u_std = np.std(u_smooth)
     if u_std < 1e-9: return 0
-    u_norm = u_bar / u_std
+    u_norm = u_smooth / u_std
     peaks = 0
     for i in range(1, len(u_norm)-1):
         if abs(u_norm[i]) > threshold:
