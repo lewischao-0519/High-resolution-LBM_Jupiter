@@ -86,7 +86,7 @@ Code/
 config.py（網格、物理參數初始化）
    │
    ▼
-core/collision.py  ── 定義所有 GPU 場：f, f_new, rho, ux, uy, Fx, Fy, noise_zonal
+core/collision.py  ── 定義所有 GPU 場：f, f_new, rho, ux, uy, Fx, Fy, noise_x, noise_y
    │
    ├── core/forcing.py::update_zonal_noise()  ── AR(1) 更新緯向噪音場
    │

@@ -14,8 +14,9 @@ f_new = ti.field(ti.f32, shape=(9, cfg.NY, cfg.NX))
 Fx_field = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
 Fy_field = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
 
-#AR噪音場（1D，每個緯度行一個值，對所有 x 相同 → 只注入 k_x=0）
-noise_zonal = ti.field(ti.f32, shape=cfg.NY)
+#AR噪音場（2D，每個網格點各自獨立演化 → 小尺度、各向同性隨機強迫）
+noise_x = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
+noise_y = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
 
 #宏觀量
 rho_field = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
@@ -112,14 +113,17 @@ def mrt_collision_kernel(
         Fx_damp = -eps_local * rho * vx
         Fy_damp = -eps_local * rho * vy
 
-        noise_val = noise_zonal[y]
         noise_max = 0.005
-        if ti.abs(noise_val) > noise_max:
-            noise_val = noise_max * ti.math.sign(noise_val)
-        
+        noise_x_val = noise_x[y, x]
+        if ti.abs(noise_x_val) > noise_max:
+            noise_x_val = noise_max * ti.math.sign(noise_x_val)
+        noise_y_val = noise_y[y, x]
+        if ti.abs(noise_y_val) > noise_max:
+            noise_y_val = noise_max * ti.math.sign(noise_y_val)
+
         # 加上微小的 2D 隨機噪音以在模擬過程中持續破壞對稱性 (增強至 5e-6)
-        Fx = Fx_cor + Fx_damp + 0.5*noise_val + 5e-6 * ti.randn(ti.f32)
-        Fy = Fy_cor + Fy_damp + 5e-6 * ti.randn(ti.f32)
+        Fx = Fx_cor + Fx_damp + 0.5*noise_x_val + 5e-6 * ti.randn(ti.f32)
+        Fy = Fy_cor + Fy_damp + 0.5*noise_y_val + 5e-6 * ti.randn(ti.f32)
 
         # 牆面無穿透：垂直外力歸零（在施力前）
         if y == 0 or y == cfg.NY-1:
