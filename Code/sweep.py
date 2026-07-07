@@ -32,10 +32,10 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 # ── 參數網格：在此定義要掃描的組合，key 對應 config.py 的 LBM_<key> 環境變數覆寫。
 #    某個參數只放一個值 = 該參數固定不掃描，只是為了記錄在 manifest 裡。
 GRID = {
-    'EPSILON_MAX': [1.0e-4, 1.5e-4, 2.0e-4],   # 海綿層最大阻尼
-    'BETA_REF':    [3e-5, 5e-5, 7e-5],         # 科氏力梯度（基準解析度）
-    'EPSILON':     [5e-5, 7e-5, 9e-5],         # Rayleigh drag 摩擦係數
-    'SIGMA':       [1.5e-6],                   # AR(1) 噪音振幅
+    'EPSILON_MAX': [1.5e-4],   # 海綿層最大阻尼
+    'BETA_REF':    [ 7e-5],         # 科氏力梯度（基準解析度）
+    'EPSILON':     [9e-5],         # Rayleigh drag 摩擦係數
+    'SIGMA':       [3e-6,3.5e-6,4e-6],                   # AR(1) 噪音振幅
 }
 
 SWEEP_OUTPUT_ROOT = os.path.join(ROOT, "output", "sweep")
