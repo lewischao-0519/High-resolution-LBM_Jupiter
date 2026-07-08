@@ -19,7 +19,7 @@ Taichi 的 GPU context 與 field 是行程內全域、載入時就依 NX/NY 建�
 import os, sys, csv, time, itertools, subprocess, argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from analysis.scan_summary import generate_summary
+from analysis.scan_summary import generate_summary, generate_physical_summary
 
 # stdout 若被導向檔案（而非真正終端機），Windows 會退回用系統 locale 編碼，
 # 無法編碼本檔案 print() 用到的 Emoji 而 crash，強制用 UTF-8。
@@ -33,9 +33,11 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 #    某個參數只放一個值 = 該參數固定不掃描，只是為了記錄在 manifest 裡。
 GRID = {
     'EPSILON_MAX': [1.5e-4],   # 海綿層最大阻尼
-    'BETA_REF':    [7e-5],         # 科氏力梯度（基準解析度）
-    'EPSILON':     [7e-5],         # Rayleigh drag 摩擦係數
-    'SIGMA':       [2e-4,3e-4,4e-4],                   # AR(1) 噪音振幅
+    'BETA_REF':    [7e-5,],         # 科氏力梯度（基準解析度）
+    'EPSILON':     [7e-5,],         # Rayleigh drag 摩擦係數
+    'SIGMA':       [5e-6,],                   # AR(1) 噪音振幅
+    'K_F':         [0.5, 0.8, 1.0, 1.3, 1.5, 2.0],            # 強迫作用波數（見 config.py 說明）
+    'TC':          [400.0],                    # AR(1) 自相關時間（多填幾個值即納入掃描；注意組合數 = 各軸長度相乘）
 }
 
 SWEEP_OUTPUT_ROOT = os.path.join(ROOT, "output", "sweep")
@@ -147,6 +149,8 @@ def main():
 
     print("\n📊 自動彙整 scan_summary.csv ...")
     generate_summary(manifest_path, SWEEP_DATA_ROOT)
+    print("\n🪐 換算物理量版 scan_summary_physical.csv ...")
+    generate_physical_summary(manifest_path, SWEEP_DATA_ROOT)
 
 
 if __name__ == "__main__":

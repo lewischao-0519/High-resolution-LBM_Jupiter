@@ -71,6 +71,20 @@ alpha = np.exp(-1.0 / Tc)     #自相關係數
 sigma = _env_override('SIGMA', 1.5e-6)                  #振幅
 WARMUP_STEPS = 100000
 
+# AR強迫的空間相關結構：對每格獨立的白噪音做高斯低通濾波，讓等向能量譜
+# E(k) ∝ k·exp(-σ²k²)（k 為 analysis/spectrum.py 定義的波數單位，殼層模態數
+# ∝k 的因子已含在內）出現峰值於 k_f，而非未濾波（delta-correlated）時能量
+# 集中在 Nyquist 附近、強迫直接打在耗散尺度上。
+# 峰值位置 k_f = 1/(σ√2) → σ = 1/(k_f·√2)（格點單位）。
+K_F = _env_override('K_F', 1.2)                         #強迫目標波數（同 spectrum.py 的 k 單位）
+FORCE_SIGMA  = 1.0 / (K_F * np.sqrt(2.0))               #對應高斯濾波標準差（格點）
+FORCE_RADIUS = max(2, int(np.ceil(3.0 * FORCE_SIGMA)))  #濾波核半徑（涵蓋 ~3σ）
+_force_r  = np.arange(-FORCE_RADIUS, FORCE_RADIUS + 1, dtype=np.float64)
+_force_w  = np.exp(-_force_r**2 / (2.0 * FORCE_SIGMA**2))
+_force_w /= _force_w.sum()
+FORCE_KERNEL = _force_w.astype(np.float32)              #1D 高斯核（分離式，x/y 各套用一次）
+FORCE_NORM   = float(1.0 / np.sum(_force_w**2))         #還原兩次卷積（x、y）造成的方差衰減
+
 #MRT矩陣參數
 s1, s2, s4, s6 = 1.2, 1.2, 1.8, 1.8
 
