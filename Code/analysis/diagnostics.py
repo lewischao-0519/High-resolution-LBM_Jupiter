@@ -1,0 +1,291 @@
+# analysis/diagnostics.py  ── 延伸診斷量（對比木星觀測數據）
+#
+# 診斷量：
+#   1. Rhines 尺度  L_β = sqrt(U_rms / β)
+#   2. 噴流位置時序（y index of each jet peak）
+#   3. 帶狀動能 KE_zonal vs 渦流動能 KE_eddy
+#   4. Reynolds stress  <u'v'>_x  (完整 y 剖面 + 平均純量)
+#   5. 渦度 RMS 與偏態 (skewness)  — 木星應為負偏（反氣旋主導）
+#   6. β-Rossby 數  Ro_β = U_rms / (β * L_β²)
+#   7. Rayleigh–Kuo 正壓不穩定判據  Q_y = β − ∂²ū/∂y²
+#   8. PV staircase 結構  （階梯分數 = max|dq/dy| / mean|dq/dy|）
+#   9. Zonostrophy index  R_β* = L_R / L_t
+#
+import numpy as np
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+import config as cfg
+from core.collision import ux_field, uy_field
+from analysis.zonal_mean import smooth_profile
+
+
+# ──────────────────────────────────────────────
+# 1. Rhines 尺度
+# ──────────────────────────────────────────────
+def rhines_scale(u_rms: float) -> float:
+    """
+    L_β = sqrt(U_rms / β)  (格點單位)
+    理論上帶狀流間距 ≈ 2π L_β。
+    對應木星觀測：赤道附近帶寬 ~10° ≈ 12000 km。
+    """
+    if cfg.BETA <= 0 or u_rms <= 0:
+        return 0.0
+    return float(np.sqrt(u_rms / cfg.BETA))
+
+
+# ──────────────────────────────────────────────
+# 2. β-Rossby 數
+# ──────────────────────────────────────────────
+def rossby_beta(u_rms: float) -> float:
+    """
+    Ro_β = U_rms / (β * L_β²) = U_rms / (β * (U_rms/β)) = 1  (理論上 ~1 時噴流形成)
+    實用版本改用格點寬度 L = NY/2 作為特徵長度：
+    Ro_β = U_rms / (β * (NY/2)²)
+    """
+    L = cfg.NY / 2.0
+    denom = cfg.BETA * L * L
+    if denom <= 0:
+        return 0.0
+    return float(u_rms / denom)
+
+
+# ──────────────────────────────────────────────
+# 3. 噴流位置（y index 列表）
+# ──────────────────────────────────────────────
+def jet_positions(u_bar: np.ndarray, threshold: float = None) -> list[int]:
+    """
+    回傳所有噴流的 y-index 列表（東風峰與西風谷皆計入）。
+    可隨時間追蹤噴流合併 / 分裂事件。
+
+    偵測前先對 ū(y) 做空間平滑（cfg.JET_SMOOTH_WINDOW），避免疊在大尺度
+    噴流上的小尺度渦流雜訊被誤判為獨立噴流峰值。
+    """
+    if threshold is None:
+        threshold = cfg.JET_THRESHOLD
+    u_smooth = smooth_profile(u_bar)
+    u_std = np.std(u_smooth)
+    if u_std < 1e-9:
+        return []
+    u_norm = u_smooth / u_std
+    positions = []
+    for i in range(1, len(u_norm) - 1):
+        if abs(u_norm[i]) > threshold:
+            if (u_norm[i] > u_norm[i-1] and u_norm[i] > u_norm[i+1]) or \
+               (u_norm[i] < u_norm[i-1] and u_norm[i] < u_norm[i+1]):
+                positions.append(int(i))
+    return positions
+
+
+# ──────────────────────────────────────────────
+# 4. 帶狀動能 vs 渦流動能
+# ──────────────────────────────────────────────
+def kinetic_energy_decomp(ux_np: np.ndarray = None,
+                           uy_np: np.ndarray = None) -> dict:
+    """
+    分解總動能為帶狀分量（mean flow）與渦流分量（eddy）。
+    
+    KE_total = 0.5 * <u² + v²>
+    KE_zonal = 0.5 * <ū²>               (ū = <u>_x)
+    KE_eddy  = KE_total - KE_zonal
+
+    逆能量串聯有效時 KE_zonal / KE_total → 大 (木星觀測 ~60-80%)
+    
+    Returns dict:
+      KE_total, KE_zonal, KE_eddy, zonal_fraction
+    """
+    if ux_np is None:
+        ux_np = ux_field.to_numpy()
+    if uy_np is None:
+        uy_np = uy_field.to_numpy()
+
+    KE_total = float(0.5 * np.mean(ux_np**2 + uy_np**2))
+
+    u_bar = ux_np.mean(axis=1)   # (NY,)
+    v_bar = uy_np.mean(axis=1)
+    KE_zonal = float(0.5 * np.mean(u_bar**2 + v_bar**2))
+
+    KE_eddy = KE_total - KE_zonal
+    zonal_frac = KE_zonal / KE_total if KE_total > 0 else 0.0
+
+    return {
+        'KE_total'      : KE_total,
+        'KE_zonal'      : KE_zonal,
+        'KE_eddy'       : KE_eddy,
+        'zonal_fraction': zonal_frac,
+    }
+
+
+# ──────────────────────────────────────────────
+# 5. Reynolds stress  <u'v'>_x
+# ──────────────────────────────────────────────
+def reynolds_stress(ux_np: np.ndarray = None,
+                    uy_np: np.ndarray = None) -> dict:
+    """
+    Reynolds stress (渦流動量通量) <u'v'>_x。
+    
+    u' = u - ū,  v' = v - v̄
+    RS(y) = <u'v'>_x  → (NY,) profile
+    RS_mean = domain-averaged |RS|
+    
+    正值 RS 梯度 → 動量向極輸送（形成西風噴流）
+    對應 Andrews & McIntyre EP-flux 理論。
+    """
+    if ux_np is None:
+        ux_np = ux_field.to_numpy()
+    if uy_np is None:
+        uy_np = uy_field.to_numpy()
+
+    u_bar = ux_np.mean(axis=1, keepdims=True)
+    v_bar = uy_np.mean(axis=1, keepdims=True)
+    u_prime = ux_np - u_bar
+    v_prime = uy_np - v_bar
+    RS_profile = (u_prime * v_prime).mean(axis=1)   # (NY,)
+
+    return {
+        'RS_profile': RS_profile,
+        'RS_mean'   : float(np.mean(np.abs(RS_profile))),
+    }
+
+
+# ──────────────────────────────────────────────
+# 6. 渦度統計：RMS + 偏態
+# ──────────────────────────────────────────────
+def vorticity_stats(omega_np: np.ndarray) -> dict:
+    """
+    渦度場的統計量。
+    
+    omega_rms   : sqrt(<ω²>)  → 湍流強度
+    omega_skew  : 偏態 = <ω³> / <ω²>^{3/2}
+                  木星觀測：負偏（反氣旋大渦較多且強）
+                  純 2D 湍流：接近 0
+                  
+    Returns dict: omega_rms, omega_skew
+    """
+    flat = omega_np.flatten()
+    rms  = float(np.sqrt(np.mean(flat**2)))
+    std  = float(np.std(flat))
+    if std < 1e-12:
+        skew = 0.0
+    else:
+        skew = float(np.mean((flat - flat.mean())**3) / std**3)
+    return {
+        'omega_rms' : rms,
+        'omega_skew': skew,
+    }
+
+
+# ──────────────────────────────────────────────
+# 7. Rayleigh–Kuo 正壓不穩定判據
+# ──────────────────────────────────────────────
+def pv_gradient(u_bar: np.ndarray) -> dict:
+    """
+    位渦梯度 Q_y(y) = β − ∂²ū/∂y²
+
+    Q_y 在 y 方向變號 → 正壓不穩定的必要條件（Rayleigh–Kuo）。
+    如果噴流剖面頻繁出現 Q_y 變號，代表剪切力不穩定有嚴謹理論依據。
+
+    二階微分對雜訊極為敏感（雜訊會被放大 ~k² 倍）。只對 ū(y) 平滑一次再做
+    二階差分並不夠——boxcar 平滑沒有陡峭的頻率截止，殘留的高頻雜訊經過
+    二階微分後仍會產生大量假變號（實測：window=25 平滑一次，仍可能顯示
+    30~50 次變號，遠高於真實噴流數量 2~10 條）。
+
+    因此這裡對 ū(y) 平滑一次、算出二階差分後，**再對 Q_y 本身套用同一個
+    cfg.JET_SMOOTH_WINDOW 做第二次平滑**，才能把微分放大的殘留雜訊壓下去。
+    已用實際模擬資料驗證：雙重平滑後變號次數與真實噴流數量同量級。
+
+    Returns dict:
+      Qy            : (NY,) 位渦梯度剖面（已雙重平滑）
+      Qy_sign_changes : 沿 y 軸的符號反轉次數（整數）
+      d2u_bar       : (NY,) ∂²ū/∂y²（格點單位，間距=1，未做第二次平滑）
+    """
+    u_smooth = smooth_profile(u_bar)
+
+    d2u = np.zeros_like(u_smooth, dtype=np.float64)
+    d2u[1:-1] = u_smooth[2:] - 2.0 * u_smooth[1:-1] + u_smooth[:-2]
+    d2u[0]    = d2u[1]
+    d2u[-1]   = d2u[-2]
+
+    Qy_raw = cfg.BETA - d2u
+    Qy     = smooth_profile(Qy_raw)   # 對微分結果再平滑一次，壓制殘留雜訊
+
+    # 計算符號反轉次數（忽略 Qy ≈ 0 的點）
+    s = np.sign(Qy)
+    s_nz = s[s != 0]
+    sign_changes = int(np.sum(np.abs(np.diff(s_nz)) > 0)) if len(s_nz) > 1 else 0
+
+    return {
+        'Qy'              : Qy.astype(np.float32),
+        'Qy_sign_changes' : sign_changes,
+        'd2u_bar'         : d2u.astype(np.float32),
+    }
+
+
+# ──────────────────────────────────────────────
+# 8. PV 梯度 staircase 結構
+# ──────────────────────────────────────────────
+def pv_staircase(u_bar: np.ndarray) -> dict:
+    """
+    PV 剖面  q(y) ≈ β·y − dū/dy （積分常數已去掉）。
+
+    staircase_score = max|dq/dy| / mean|dq/dy|
+      ~1   → 平滑漸變（混合過於均勻，屏障弱）
+      >>1  → 尖銳跳躍（PV 階梯，強輸送屏障）
+    穩定木星噴流對應的 staircase_score 通常 >> 5。
+
+    計算 dū/dy 前先對 ū(y) 做空間平滑（cfg.JET_SMOOTH_WINDOW）。但單次平滑
+    後直接微分仍不足以壓制殘留雜訊（與 pv_gradient() 相同的問題：boxcar
+    平滑沒有陡峭頻率截止，微分會把殘留高頻雜訊放大），因此對 dū/dy 本身
+    再套用同一個平滑視窗做第二次平滑，才代入 q(y) 計算，避免 mean|dq/dy|
+    分母被雜訊污染、讓 staircase_score 虛高暴衝或劇烈震盪。
+
+    Returns dict:
+      q_profile       : (NY,) PV 剖面（已對 dū/dy 做雙重平滑）
+      staircase_score : 純量
+      max_dq, mean_dq : PV 梯度極值與平均值
+    """
+    u_smooth = smooth_profile(u_bar)
+    y  = np.arange(len(u_smooth), dtype=np.float64)
+    du = smooth_profile(np.gradient(u_smooth))   # 對微分結果再平滑一次
+    q  = cfg.BETA * y - du
+
+    dq      = np.abs(np.gradient(q))
+    mean_dq = float(np.mean(dq))
+    max_dq  = float(np.max(dq))
+    score   = max_dq / mean_dq if mean_dq > 1e-12 else 0.0
+
+    return {
+        'q_profile'      : q.astype(np.float32),
+        'staircase_score': float(score),
+        'max_dq'         : max_dq,
+        'mean_dq'        : mean_dq,
+    }
+
+
+# ──────────────────────────────────────────────
+# 9. Zonostrophy index  R_β*
+# ──────────────────────────────────────────────
+def estimate_energy_injection(ke_total: float) -> float:
+    """
+    在強迫–耗散穩態下能量守恆：注入率 ε ≈ 耗散率 = EPSILON · KE_total。
+    這是可直接量測的代理量，不依賴難以校正的強迫振幅。
+    單位：（格點速度）²/步。
+    """
+    return float(cfg.EPSILON * ke_total)
+
+
+def zonostrophy_index(u_rms: float, epsilon: float) -> float:
+    """
+    R_β* = L_R / L_t
+
+      L_R = sqrt(2 · u_rms / β)      ── Rhines 尺度（格點）
+      L_t = (ε / β³)^{1/5}           ── 渦流翻轉時間 = Rossby 波週期的過渡尺度
+
+    判斷依據（Sukoriansky et al. 2007）：
+      R_β* ≳ 2.5 → zonostrophic regime（帶狀流穩定主導）
+      R_β* ≲ 1.5 → 摩擦主導（噴流無法站穩）
+    """
+    if cfg.BETA <= 0 or epsilon <= 0 or u_rms <= 0:
+        return 0.0
+    L_R = float(np.sqrt(2.0 * u_rms / cfg.BETA))
+    L_t = float((epsilon / cfg.BETA**3) ** 0.2)
+    return L_R / L_t if L_t > 0 else 0.0

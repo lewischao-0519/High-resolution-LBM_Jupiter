@@ -39,22 +39,24 @@ def compute_energy_spectrum(ux_np: np.ndarray = None,
     # 能量密度（對應 Eq.6）
     E2D  = 0.5 * (np.abs(Ux)**2 + np.abs(Uy)**2) / (nx * ny)**2
 
-    # 波數網格（正規化至格點單位）
-    kx = np.fft.fftfreq(nx) * nx   # ∈ [-nx/2, nx/2)
-    ky = np.fft.fftfreq(ny) * ny
+    # 波數網格：格點間距 dx=dy=1，故兩軸的物理波數皆為 2π·(每軸 cycle 數)，
+    # 須先各自換算成物理單位再合併，避免 NX≠NY 時把兩軸 cycle count 直接
+    # 相加合併，導致較密（點數較多）的那一軸波數被系統性放大。
+    kx = 2.0 * np.pi * np.fft.fftfreq(nx)   # rad/格點，Nyquist=π（與 nx 無關）
+    ky = 2.0 * np.pi * np.fft.fftfreq(ny)   # rad/格點，Nyquist=π（與 ny 無關）
     KX, KY = np.meshgrid(kx, ky)
-    K  = np.sqrt(KX**2 + KY**2)
+    K  = np.sqrt(KX**2 + KY**2)             # 已是正確的等向物理波數
 
-    # 環形平均（等向性假設）
-    k_max  = min(nx, ny) // 2
-    k_bins = np.arange(0.5, k_max + 0.5, 1.0)
-    E_bins = np.zeros(len(k_bins))
+    # 環形平均（等向性假設）；bin 寬度採較粗軸（min(nx,ny)）的原生解析度
+    dk     = 2.0 * np.pi / min(nx, ny)
+    n_bins = min(nx, ny) // 2
+    k_bins = (np.arange(n_bins) + 0.5) * dk
+    E_bins = np.zeros(n_bins)
 
     for idx, k_c in enumerate(k_bins):
-        mask = (K >= k_c - 0.5) & (K < k_c + 0.5)
+        mask = (K >= k_c - 0.5*dk) & (K < k_c + 0.5*dk)
         E_bins[idx] = E2D[mask].sum()
 
-    k_bins = k_bins * (2.0 * np.pi / min(nx, ny))   # 轉換為物理波數
     return k_bins, E_bins
 
 
@@ -80,7 +82,7 @@ def compute_zonal_mean_spectrum(ux_np: np.ndarray = None
 
 
 def kolmogorov_slope(k: np.ndarray, E: np.ndarray,
-                     k_lo: float = 0.05, k_hi: float = 0.5) -> float:
+                     k_lo: float = 0.08, k_hi: float = 1.0) -> float:
     """
     在對數空間擬合 E(k) ~ k^α，回傳斜率 α。
     Kolmogorov: α = -5/3（3D湍流）

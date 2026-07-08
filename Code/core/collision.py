@@ -14,7 +14,11 @@ f_new = ti.field(ti.f32, shape=(9, cfg.NY, cfg.NX))
 Fx_field = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
 Fy_field = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
 
-#AR噪音場（1D，每個緯度行一個值，對所有 x 相同 → 只注入 k_x=0）
+#AR噪音場（2D，每個網格點各自獨立演化 → 小尺度、各向同性隨機強迫）
+noise_x = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
+noise_y = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
+
+#AR噪音場（1D，緯向均勻 → 大尺度帶狀強迫，只作用於 x 方向）
 noise_zonal = ti.field(ti.f32, shape=cfg.NY)
 
 #宏觀量
@@ -58,13 +62,15 @@ def forcing_moments(ux: float, uy: float, Fx: float, Fy: float):
 #MRT碰撞模型(於main中調用）
 @ti.kernel
 def mrt_collision_kernel(
-    omega_shear: ti.f32, 
-    s1: ti.f32, 
-    s2: ti.f32, 
-    s4: ti.f32, 
-    s6: ti.f32, 
-    f0: ti.f32, 
-    beta: ti.f32, 
+    f_src: ti.template(),
+    f_dst: ti.template(),
+    omega_shear: ti.f32,
+    s1: ti.f32,
+    s2: ti.f32,
+    s4: ti.f32,
+    s6: ti.f32,
+    f0: ti.f32,
+    beta: ti.f32,
     epsilon: ti.f32
 ):
     ny_half = cfg.NY // 2
@@ -75,9 +81,9 @@ def mrt_collision_kernel(
             px = (x - cfg.CX[i] + cfg.NX) % cfg.NX
             py = y - cfg.CY[i]
             if py < 0 or py >= cfg.NY:
-                f_local[i] = f[cfg.OPP[i], y, x]   # 在當前格反射
+                f_local[i] = f_src[cfg.OPP[i], y, x]   # 在當前格反射
             else:
-                f_local[i] = f[i, py, px]
+                f_local[i] = f_src[i, py, px]
 
         # 2. 巨觀量
         rho = 0.0; vx = 0.0; vy = 0.0
@@ -110,14 +116,21 @@ def mrt_collision_kernel(
         Fx_damp = -eps_local * rho * vx
         Fy_damp = -eps_local * rho * vy
 
-        noise_val = noise_zonal[y]
         noise_max = 0.005
-        if ti.abs(noise_val) > noise_max:
-            noise_val = noise_max * ti.math.sign(noise_val)
-        
-        # 加上微小的 2D 隨機噪音以在模擬過程中持續破壞對稱性 (增強至 5e-6)
-        Fx = Fx_cor + Fx_damp + 0.5*noise_val + 5e-6 * ti.randn(ti.f32)
-        Fy = Fy_cor + Fy_damp + 5e-6 * ti.randn(ti.f32)
+        noise_x_val = noise_x[y, x]
+        if ti.abs(noise_x_val) > noise_max:
+            noise_x_val = noise_max * ti.math.sign(noise_x_val)
+        noise_y_val = noise_y[y, x]
+        if ti.abs(noise_y_val) > noise_max:
+            noise_y_val = noise_max * ti.math.sign(noise_y_val)
+
+        # 1D 緯向 AR(1) 噪音（只作用於 x 方向，同一緯度各格相同）
+        zonal_val = noise_zonal[y]
+        if ti.abs(zonal_val) > noise_max:
+            zonal_val = noise_max * ti.math.sign(zonal_val)
+
+        Fx = Fx_cor + Fx_damp + 0.5*noise_x_val + 0.5*zonal_val + 5e-6 * ti.randn(ti.f32)
+        Fy = Fy_cor + Fy_damp + 0.5*noise_y_val + 5e-6 * ti.randn(ti.f32)
 
         # 牆面無穿透：垂直外力歸零（在施力前）
         if y == 0 or y == cfg.NY-1:
@@ -142,18 +155,12 @@ def mrt_collision_kernel(
         for i in ti.static(range(9)):
             v = 0.0
             for j in ti.static(range(9)): v += M_inv[i,j]*m_star[j]
-            f_new[i, y, x] = ti.max(v, 1e-8)
+            f_dst[i, y, x] = ti.max(v, 1e-8)
 
         rho_field[y, x] = rho
         ux_field[y, x] = vx_half
         uy_field[y, x] = vy_half if (y != 0 and y != cfg.NY-1) else 0.0
         
-#裁減負值（安全措施）（於main中調用）
-@ti.kernel
-def swap_fields():
-    for i, y, x in f:
-        f[i, y, x], f_new[i, y, x] = f_new[i, y, x], f[i, y, x]
-
 #初始化平衡分佈（於main中調用）
 @ti.kernel
 def init_fields_kernel(U0: float):
