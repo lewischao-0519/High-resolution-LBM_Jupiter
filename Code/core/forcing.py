@@ -4,7 +4,7 @@ import numpy as np
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import config as cfg
-from core.collision import Fx_field, Fy_field, ux_field, uy_field, rho_field, f, noise_x, noise_y
+from core.collision import Fx_field, Fy_field, ux_field, uy_field, rho_field, f, noise_x, noise_y, noise_zonal
 from core.lattice import feq_single
 
 # ── 強迫的空間相關結構 ──
@@ -25,6 +25,7 @@ _mid_y = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
 def init_noise_fields():
     noise_x.fill(0.0)
     noise_y.fill(0.0)
+    noise_zonal.fill(0.0)
     _raw_x.fill(0.0)
     _raw_y.fill(0.0)
     _mid_x.fill(0.0)
@@ -103,7 +104,19 @@ def _blur_y_pass_and_update(alpha: float, sigma: float):
 
 
 #AR噪音field更新（小尺度、各向同性、空間相關集中於 K_F 附近）（於main中調用）
-def update_zonal_noise(alpha: float, sigma: float):
+def update_2d_noise(alpha: float, sigma_2d: float):
     _draw_raw_noise()
     _blur_x_pass()
-    _blur_y_pass_and_update(alpha, sigma)
+    _blur_y_pass_and_update(alpha, sigma_2d)
+
+
+@ti.kernel
+def _update_zonal_ar1(alpha: float, sigma_zonal: float):
+    """1D 緯向 AR(1) 噪音：每列（y）獨立演化，同一緯度各格共用同一值。"""
+    for y in noise_zonal:
+        noise_zonal[y] = alpha * noise_zonal[y] + sigma_zonal * ti.randn(ti.f32)
+
+
+#1D 緯向 AR(1) 噪音更新（大尺度帶狀強迫）（於main中調用）
+def update_zonal_noise(alpha: float, sigma_zonal: float):
+    _update_zonal_ar1(alpha, sigma_zonal)

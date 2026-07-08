@@ -169,7 +169,7 @@ def build_param_row(manifest_rec: dict) -> dict:
     row = {}
     if 'BETA_REF' in manifest_rec:
         row['BETA'] = manifest_rec['BETA_REF']
-    for key in ('EPSILON', 'EPSILON_MAX', 'SIGMA', 'K_F', 'TC'):
+    for key in ('EPSILON', 'EPSILON_MAX', 'SIGMA_2D', 'SIGMA_ZONAL', 'K_F', 'TC'):
         if key in manifest_rec:
             row[key] = manifest_rec[key]
     row['NU'] = NU_FIXED

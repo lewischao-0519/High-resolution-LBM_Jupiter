@@ -68,7 +68,8 @@ EPSILON_MAX = _env_override('EPSILON_MAX', 1.5e-4)       #海綿層最大阻尼�
 # AR參數
 Tc = _env_override('TC', 400.0)                    #時間尺度
 alpha = np.exp(-1.0 / Tc)     #自相關係數
-sigma = _env_override('SIGMA', 1.5e-6)                  #振幅
+SIGMA_2D    = _env_override('SIGMA_2D',    1.5e-6)      #2D 各向同性強迫振幅
+SIGMA_ZONAL = _env_override('SIGMA_ZONAL', 3e-6)        #1D 緯向 AR(1) 強迫振幅
 WARMUP_STEPS = 100000
 
 # AR強迫的空間相關結構：對每格獨立的白噪音做高斯低通濾波，讓等向能量譜

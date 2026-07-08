@@ -18,6 +18,9 @@ Fy_field = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
 noise_x = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
 noise_y = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
 
+#AR噪音場（1D，緯向均勻 → 大尺度帶狀強迫，只作用於 x 方向）
+noise_zonal = ti.field(ti.f32, shape=cfg.NY)
+
 #宏觀量
 rho_field = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
 ux_field  = ti.field(ti.f32, shape=(cfg.NY, cfg.NX))
@@ -121,8 +124,12 @@ def mrt_collision_kernel(
         if ti.abs(noise_y_val) > noise_max:
             noise_y_val = noise_max * ti.math.sign(noise_y_val)
 
-        # 加上微小的 2D 隨機噪音以在模擬過程中持續破壞對稱性 (增強至 5e-6)
-        Fx = Fx_cor + Fx_damp + 0.5*noise_x_val + 5e-6 * ti.randn(ti.f32)
+        # 1D 緯向 AR(1) 噪音（只作用於 x 方向，同一緯度各格相同）
+        zonal_val = noise_zonal[y]
+        if ti.abs(zonal_val) > noise_max:
+            zonal_val = noise_max * ti.math.sign(zonal_val)
+
+        Fx = Fx_cor + Fx_damp + 0.5*noise_x_val + 0.5*zonal_val + 5e-6 * ti.randn(ti.f32)
         Fy = Fy_cor + Fy_damp + 0.5*noise_y_val + 5e-6 * ti.randn(ti.f32)
 
         # 牆面無穿透：垂直外力歸零（在施力前）

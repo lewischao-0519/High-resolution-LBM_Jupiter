@@ -29,9 +29,8 @@ from core.collision import (
     mrt_collision_kernel,init_fields,
 )
 from core.forcing import (
-    #apply_coriolis_drag_update_f,
+    update_2d_noise,
     update_zonal_noise,
-    #apply_zonal_ar1_forcing,
     init_noise_fields
 )
 #分析模組
@@ -66,7 +65,7 @@ _CONFIG_PARAMS = [
     'F0', 'NY_REF', 'BETA_REF', 'BETA',
     'EPSILON',
     'SPONGE_FRAC', 'EPSILON_MAX',
-    'Tc', 'alpha', 'sigma', 'WARMUP_STEPS',
+    'Tc', 'alpha', 'SIGMA_2D', 'SIGMA_ZONAL', 'WARMUP_STEPS',
     's1', 's2', 's4', 's6',
     'U_MAX', 'NU', 'TAU', 'OMEGA',
     'JET_SMOOTH_WINDOW', 'JET_THRESHOLD',
@@ -245,7 +244,8 @@ def run_simulation():
     for step in range(cfg.MAX_STEPS+1):
         #模擬
         if step >= (cfg.WARMUP_STEPS) and step % 100 == 0:
-            update_zonal_noise(cfg.alpha, cfg.sigma)          #仍先更新AR(1)噪音
+            update_2d_noise(cfg.alpha, cfg.SIGMA_2D)
+            update_zonal_noise(cfg.alpha, cfg.SIGMA_ZONAL)
         #純LBM+外力（streaming+MRT+forcing）
         mrt_collision_kernel(src, dst, cfg.OMEGA,cfg.s1,cfg.s2,cfg.s4,cfg.s6,cfg.F0,cfg.BETA,cfg.EPSILON)   #已包含科氏力、阻尼、噪音
         src, dst = dst, src   #交換讀寫緩衝（僅換指標，不搬資料）
