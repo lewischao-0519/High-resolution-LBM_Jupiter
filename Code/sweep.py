@@ -12,8 +12,8 @@ Taichi 的 GPU context 與 field 是行程內全域、載入時就依 NX/NY 建�
 輸出路徑，多個子行程共用同一張 GPU、由驅動排程執行。
 
 用法：
-  python3 sweep.py                    # 依下方 GRID 展開所有組合，預設同時跑 4 組
-  python3 sweep.py --max-parallel 6   # 依顯卡記憶體調整同時執行數量
+  python sweep.py                    # 依下方 GRID 展開所有組合，預設同時跑 4 組
+  python sweep.py --max-parallel 6   # 依顯卡記憶體調整同時執行數量
 """
 
 import os, sys, csv, time, itertools, subprocess, argparse
