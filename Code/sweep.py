@@ -36,9 +36,9 @@ GRID = {
     'BETA_REF':    [7e-5,],         # 科氏力梯度（基準解析度）
     'EPSILON':     [7e-5,],         # Rayleigh drag 摩擦係數
     'SIGMA_2D':    [2.5e-7],                  # 2D 各向同性強迫振幅
-    'SIGMA_ZONAL': [7e-7, 1e-6, 1.5e-6],                    # 1D 緯向 AR(1) 強迫振幅
-    'K_F':         [5e-2, 6e-2, 7e-2],            # 強迫作用波數（見 config.py 說明）
-    'TC':          [400.0],                    # AR(1) 自相關時間（多填幾個值即納入掃描；注意組合數 = 各軸長度相乘）
+    'SIGMA_ZONAL': [1.5e-6,],                    # 1D 緯向 AR(1) 強迫振幅
+    'K_F':         [8e-2,],            # 強迫作用波數（見 config.py 說明）
+    'TC':          [100.0, 200.0, 400.0, 600.0, 800.0, 1200.0],                    # AR(1) 自相關時間（多填幾個值即納入掃描；注意組合數 = 各軸長度相乘）
 }
 
 SWEEP_OUTPUT_ROOT = os.path.join(ROOT, "output", "sweep")
