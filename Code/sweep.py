@@ -33,12 +33,12 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 #    某個參數只放一個值 = 該參數固定不掃描，只是為了記錄在 manifest 裡。
 GRID = {
     'EPSILON_MAX': [1.5e-4],   # 海綿層最大阻尼
-    'BETA_REF':    [1e-4, 1.5e-4, 2e-4],         # 科氏力梯度（基準解析度）
+    'BETA_REF':    [7e-5],         # 科氏力梯度（基準解析度）
     'EPSILON':     [7e-5,],         # Rayleigh drag 摩擦係數
-    'SIGMA_2D':    [2.5e-7],                  # 2D 各向同性強迫振幅
-    'SIGMA_ZONAL': [1e-6, 1.2e-6,],                    # 1D 緯向 AR(1) 強迫振幅
+    'SIGMA_2D':    [0],                  # 2D 各向同性強迫振幅
+    'SIGMA_ZONAL': [5e-6],                    # 1D 緯向 AR(1) 強迫振幅
     'K_F':         [8e-2,],            # 強迫作用波數（見 config.py 說明）
-    'TC':          [800.0,],                    # AR(1) 自相關時間（多填幾個值即納入掃描；注意組合數 = 各軸長度相乘）
+    'TC':          [400.0,],                    # AR(1) 自相關時間（多填幾個值即納入掃描；注意組合數 = 各軸長度相乘）
 }
 
 SWEEP_OUTPUT_ROOT = os.path.join(ROOT, "output", "sweep")

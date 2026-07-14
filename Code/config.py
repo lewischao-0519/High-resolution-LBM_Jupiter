@@ -21,7 +21,7 @@ ti.init(arch=ti.gpu, default_fp=ti.f32, random_seed=RANDOM_SEED)
 #網格基本參數
 NX        = 1024           # x 方向格點數（緯向）
 NY        = 512           # y 方向格點數（徑向 / 緯度方向）
-MAX_STEPS = _env_override('MAX_STEPS', 3000000, int)        # 總演化步數
+MAX_STEPS = _env_override('MAX_STEPS', 1500000, int)        # 總演化步數
 SAVE_EVERY = 5000         # 每幾步存一幀
 SAVE_SPECTRUM = 4*SAVE_EVERY    # 每幾步存數據
 
